@@ -69,7 +69,10 @@ Run it in order: the first items are mechanical and catch most problems.
    one-folder format, not a missing-`release.py` mistake. Offer both fixes: rebuild per-CPU zips with `tools/release.py`
    (or `vst-release.yml` with `sdk_project`), **or** keep the SDK zip, name the asset `*-mpc-sdk.zip` and remove
    `asset_pattern` from the entry, and the catalog converts it itself (`docs/CATALOG.md`, "Releases with only an Akai SDK
-   zip"; needs a 32-bit binary in `plugin.json`, else a Gen2-only plugin must release per-CPU zips). A literal
+   zip"; needs a 32-bit binary in `plugin.json`). Which to suggest: the conversion is the least work for a simple first
+   listing, but it takes no `--requires` / `--depends` / `--conflicts` (`tools/sdk_release.py` has none) and refuses a
+   Gen2-only plugin, so those need per-CPU zips. For an author who will keep releasing, point them at `vst-release.yml`
+   with `sdk_project`, which publishes the per-CPU zips on every run. A literal
    `asset_pattern` (no `*`) is also worth a note: a rename or a new version silently matches nothing.
 10. **`id` and `name`:** the `id` is lower case, stable and not already used. It can never change after merge. Neither the
     `id` nor the `name` may take another author's plugin. A second port of the same plugin gets a distinct name and `id`
