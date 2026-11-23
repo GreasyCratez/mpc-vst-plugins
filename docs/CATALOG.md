@@ -277,6 +277,15 @@ writes and a stock Sample without the card, a way to skip it at boot, stock user
 maintainer (`flags_reviewed`, as for plugins), all shown on the card. The catalog installs nothing from this tab. Open: whether entries need
 an Experimental tier, and whether bundled plugin hashes should be checked against the plugins' releases at build time (today only the id is).
 
+### Other sources: link-only listings (2026-11-23, offline: unit tests and headless-browser checks; no listings yet)
+Closed-source and paid plugins can be listed as links to the developer's own site, never installed (policy: `POLICY.md`, "Other sources";
+fields: `CATALOG_SPEC.md`). They are kept apart from the registry on purpose: their own directory (`catalog/listings/`) and their own
+output (`listings.json`), so no installer or Plugin Manager can be offered one, even through a bug in a client or the build
+(`catalog.json` is byte-identical with or without listings, tested). On the site, Other sources is a section at the right of the section
+row, shown only when built with `--other-sources` and a listing exists; cards have a grey "Visit developer's site" button (red stays for
+what the catalog installs). While Plugins is searched or filtered, a line says how many listings match the same search, style or tags.
+Not built yet: a nightly check of `shop_url` links, a "not working on MPC OS x.y" marker for the 30-day rule (until then a maintainer edits the summary or delists), and maintainers' device tests shown on the card.
+
 ### Site
 Generated static HTML (`tools/catalog_site.py`, no JS framework): searchable/filterable grid, a page per plugin
 (screenshot, description, version history, install steps, source link, checksum, tested-on), a "recently updated"
