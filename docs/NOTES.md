@@ -3136,3 +3136,14 @@ State left on the stick: `autorun.sh` (T1 tag) and one `AUTORUN_MARKER_T1-root-d
   `shiftKnobs` in `plugin.json`; without them the Sample puts params 0-5 there, labelled `Param 1`-`Param 6`. Releases had
   neither. `gen_vst.py` now writes `build/knob-fx.json` from vst.json `"knob_fx"`, or from an effect's `"sample_page"` banks,
   and `release.py` adds it to `plugin.json`; `sdk_release.py` keeps an SDK plugin's own. Not yet checked on a device.
+
+## 2026-11-25: an addin never loaded when another addin's drop-in sorted after ours (Force, MPC OS 3.10.1; device-tested by hand, installer fix offline)
+- Force 3.10.1.12 with a `hwremap.conf` drop-in that sets the whole `LD_PRELOAD` list: the Plugin Manager app installed, MPC restarted, and
+  `/proc/<MPC>/environ` had no `modeslot.so`. systemd applies drop-ins in name order, so `hwremap.conf` (h) is read after
+  `90-mpc-addins.conf` (9) and replaces our list. `/etc` there is the stacked layout of case 18 (a read-only overlay on a writable one), so
+  `unit_with_preload` found `hwremap.conf` but `writable` refused the read-only view, and the installer fell back to the shared drop-in.
+- Fix (`upper_of` in addin-lib.sh): when the file that wins is also in the writable layer, edit that copy (add on install, remove on
+  uninstall) and drop the cached view. Test case 18b. Not run under the device's BusyBox yet. By hand on the Force the same edit loaded the
+  app (`modeslot: installed: Force 3.10.1`) and it survived a reboot.
+- Lesson: editing the upper directory with `sed -i` (new inode) behind a mounted overlay left `/etc` showing the old file; `etc_refresh`
+  (drop_caches) or an in-place write fixes the view, and a reboot always does.
