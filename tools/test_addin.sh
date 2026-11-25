@@ -311,6 +311,24 @@ run a uninstall.sh; run b uninstall.sh
 [ ! -e "$UP" ] && [ ! -e "$BU" ] && ok "stacked /etc: the last uninstall removes the drop-in from the writable layer, and the unit" || bad "stacked uninstall: $(ls "$(dirname "$UP")" 2>&1)"
 fresh; unit 'Restart=always'; ro a-w; chmod u+w "$T/root/usr/lib/systemd/system"; run a install.sh   # a first addin on such a device
 [ -f "$UP" ] && grep -qx "Environment=LD_PRELOAD=$A" "$UP" && [ ! -e "$DROP" ] && ok "stacked /etc: a first install also writes the writable layer" || bad "stacked first: $(cat "$T/out")"
+# 18b. Force 3.10.1 (device 2026-11-25): the same stacked /etc, and another addin's drop-in (MockbaMod's hwremap.conf) already sets
+# LD_PRELOAD. It sorts after 90-mpc-addins.conf, so systemd reads it last and it replaces our list: the shared drop-in would never
+# load. The addin goes into that file in the writable layer instead (the read-only view of it cannot be edited), and comes out again.
+export ADDIN_MOUNTS="$T/mounts-3101"
+fresh; unit 'Restart=always'; ro a-w; chmod u+w "$T/root/usr/lib/systemd/system"
+HW="$T/root/data/system/etc/overlay/systemd/system/acvs.service.d/hwremap.conf"; HWV="$T/root/etc/systemd/system/acvs.service.d/hwremap.conf"
+mkdir -p "$(dirname "$HW")" "$(dirname "$HWV")"
+printf '[Service]\nEnvironment="LD_PRELOAD=/data/hw.so:/data/r.so"\n' | tee "$HW" > "$HWV"
+chmod a-w "$(dirname "$HWV")" "$HWV"
+run a install.sh
+grep -qx "Environment=\"LD_PRELOAD=/data/hw.so:/data/r.so:$A\"" "$HW" && [ ! -e "$DROP" ] && [ ! -e "$T/root/data/system/etc/overlay/systemd/system/acvs.service.d/90-mpc-addins.conf" ] \
+  && ok "shadowing drop-in: the addin is added to the later-sorting file in the writable layer, no shared drop-in" || bad "shadowing install: $(cat "$HW" 2>&1; cat "$T/out")"
+grep -qx drop_caches "$T/log" && ok "shadowing drop-in: the cached view is refreshed" || bad "shadowing: no refresh: $(cat "$T/log")"
+run a uninstall.sh
+grep -qx 'Environment="LD_PRELOAD=/data/hw.so:/data/r.so"' "$HW" && ok "shadowing drop-in: uninstall takes the addin out again" || bad "shadowing uninstall: $(cat "$HW" 2>&1)"
+chmod -R u+w "$T/root"
+export ADDIN_MOUNTS="$T/mounts-plain"
+
 printf '/dev/root / ext4 ro,relatime 0 0\noverlay /etc overlay rw,lowerdir=/etc,upperdir=/data/my\\040etc 0 0\noverlay /etc overlay ro,lowerdir=/u:/etc 0 0\n' > "$T/mounts-3101-esc"
 export ADDIN_MOUNTS="$T/mounts-3101-esc"
 fresh; unit 'Restart=always'; ro a-w; chmod u+w "$T/root/usr/lib/systemd/system"; run a install.sh
