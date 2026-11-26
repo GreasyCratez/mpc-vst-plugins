@@ -12,6 +12,5 @@
     "voice"
   ],
   "screenshot": "https://raw.githubusercontent.com/ymn27nhnwd-hue/argevox-geraet/v1.0.1/docs/interfaz.png",
-  "source_available": true,
   "min_os": "3.10.1"
 }
