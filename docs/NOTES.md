@@ -2808,3 +2808,20 @@ runs on `ubuntu-latest` again (the `ubuntu-24.04` pin of #1086 is gone). The dev
 `dd` cases differ.
 
 - **Catalog build: download cap raised to 128 MiB (2026-11-22, CI log + release API; fix tested offline only).** The `g2-stick-v2.0.0` stick zip is 72,916,787 bytes, over the 64 MiB cap in `tools/site_downloads.py`, so "Copy the Install page's downloads" failed on every push to main (PR runs skip that step, so they stayed green). Both that cap and the Install page reader (`drivewrite.js`) are now 128 MiB. Not yet checked on a real stick or in the deployed Chrome page.
+
+## 2026-11-26: which MIDI reaches a VST2 instrument on the MPC Key 61 (device, Key 61, Gen1, MPC OS 3.10.1)
+
+A silent probe instrument (`midiprobe` in the mpc-vst-ondes port repo: logs every `midi()` call; vst.json `"cc": false,
+"nrpn": false` so the wrapper hands every CC on) on a track, with the keyboard's own controls. Everything arrived on channel 1:
+
+- **Pitch bend (0xE0): real 14-bit.** The pitch wheel swept 0 to 16383 with 94 distinct LSB values in 177 messages, about one
+  every 5.8 ms (about 170 per second), never more than 680 apart. It returns to 8192 (once 8191).
+- **Touch strip:** in a pitch-bend mode it sends the same 14-bit bend as an absolute position: it jumps straight to where the
+  finger lands and snaps back to the centre on release (steps of 8192 seen). In a modulation mode it sends CC 1. Several of its
+  other modes sent nothing to the plugin (not identified one by one).
+- **Mod wheel: CC 1**, 0-127. **Expression pedal: CC 11**, 0-127. **Sustain pedal: CC 64**, 0 / 127.
+- **Aftertouch: channel pressure (0xD0)** 0-127; no poly aftertouch (0xA0) seen.
+- Notes with velocity (1-105 seen in this test).
+
+So a plugin can use bend, mod wheel, expression, sustain and channel pressure as played controls on this keyboard. Not tried:
+other Gen1/Gen2 models, MIDI from an external controller, and what a sequenced track's recorded bend sends.
