@@ -142,9 +142,18 @@ check_lib() {   # service: refuse a shared drop-in written by a newer installer,
     [ "$v" -le "$ADDIN_LIB_VERSION" ] || die "$(ours "$1") was written by a newer addin installer (format $v, this one is $ADDIN_LIB_VERSION): install a newer release of this addin"
 }
 
+# A file seen through a stacked read-only /etc, as it is in the writable layer (where it can be edited and persists), if it is there.
+# Needed when another addin's drop-in (hwremap.conf on a Force) sets LD_PRELOAD and sorts after ours: systemd reads it last, so it
+# replaces our list entirely and the only way to load an addin is to edit that file (Force 3.10.1, device 2026-11-25).
+upper_of() {   # file
+    [ -n "$ETC_UPPER" ] || { echo "$1"; return; }
+    rel=${1#"$SYSTEMD_ROOT"/etc/}
+    if [ "$rel" != "$1" ] && [ -f "$SYSTEMD_ROOT$ETC_UPPER/$rel" ]; then echo "$SYSTEMD_ROOT$ETC_UPPER/$rel"; else echo "$1"; fi
+}
 edits_in_place() { [ -n "$2" ] && [ "$2" != "$(ours "$1")" ] && writable "$2"; }   # service unit
 
 preload_add() {   # service unit so
+    [ -z "$2" ] || set -- "$1" "$(upper_of "$2")" "$3"
     if edits_in_place "$1" "$2"; then
         bak="$2.bak-mpc-addins"   # the first edit keeps a backup
         [ -f "$bak" ] || cp "$2" "$bak"
@@ -152,6 +161,7 @@ preload_add() {   # service unit so
         edit_preload "$2" add "$3"
         grep -qF "$3" "$2" || { mv "$2.prev" "$2"; echo "error: editing $2 failed; restored" >&2; exit 1; }
         rm -f "$2.prev"
+        etc_refresh
     else
         f=$(ours "$1")
         was_ro=0; [ "$DROPIN_ROOT" = /etc ] && [ -z "$ETC_UPPER" ] && root_ro && ! etc_overlay_rw && was_ro=1
@@ -168,8 +178,10 @@ preload_remove() {   # service so: out of every writable file that lists it, the
     o=$(ours "$1")
     for d in $UNIT_DIRS; do
         for f in "$SYSTEMD_ROOT$d/$1.service" "$SYSTEMD_ROOT$d/$1.service.d/"*.conf; do
-            [ -f "$f" ] && [ "$f" != "$o" ] && [ "$f" != "$(ours_logical "$1")" ] && grep -qF "$2" "$f" || continue
-            if writable "$f"; then edit_preload "$f" remove "$2"; else echo "warning: $f lists $2 but is read-only" >&2; fi
+            [ -f "$f" ] && [ "$f" != "$o" ] && [ "$f" != "$(ours_logical "$1")" ] || continue
+            wf=$(upper_of "$f")   # a stacked /etc shows its old copy until the cache is dropped: look in the writable layer
+            grep -qF "$2" "$wf" || continue
+            if writable "$wf"; then edit_preload "$wf" remove "$2"; etc_refresh; else echo "warning: $f lists $2 but is read-only" >&2; fi
         done
     done
     if [ -f "$o" ]; then
