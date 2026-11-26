@@ -3147,3 +3147,20 @@ State left on the stick: `autorun.sh` (T1 tag) and one `AUTORUN_MARKER_T1-root-d
   app (`modeslot: installed: Force 3.10.1`) and it survived a reboot.
 - Lesson: editing the upper directory with `sed -i` (new inode) behind a mounted overlay left `/etc` showing the old file; `etc_refresh`
   (drop_caches) or an in-place write fixes the view, and a reboot always does.
+
+## 2026-11-26: which MIDI reaches a VST2 instrument on the MPC Key 61 (device, Key 61, Gen1, MPC OS 3.10.1)
+
+A silent probe instrument (`midiprobe` in the mpc-vst-ondes port repo: logs every `midi()` call; vst.json `"cc": false,
+"nrpn": false` so the wrapper hands every CC on) on a track, with the keyboard's own controls. Everything arrived on channel 1:
+
+- **Pitch bend (0xE0): real 14-bit.** The pitch wheel swept 0 to 16383 with 94 distinct LSB values in 177 messages, about one
+  every 5.8 ms (about 170 per second), never more than 680 apart. It returns to 8192 (once 8191).
+- **Touch strip:** in a pitch-bend mode it sends the same 14-bit bend as an absolute position: it jumps straight to where the
+  finger lands and snaps back to the centre on release (steps of 8192 seen). In a modulation mode it sends CC 1. Several of its
+  other modes sent nothing to the plugin (not identified one by one).
+- **Mod wheel: CC 1**, 0-127. **Expression pedal: CC 11**, 0-127. **Sustain pedal: CC 64**, 0 / 127.
+- **Aftertouch: channel pressure (0xD0)** 0-127; no poly aftertouch (0xA0) seen.
+- Notes with velocity (1-105 seen in this test).
+
+So a plugin can use bend, mod wheel, expression, sustain and channel pressure as played controls on this keyboard. Not tried:
+other Gen1/Gen2 models, MIDI from an external controller, and what a sequenced track's recorded bend sends.
