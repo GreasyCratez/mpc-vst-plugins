@@ -30,6 +30,10 @@ Run it in order: the first items are mechanical and catch most problems.
    If the failure is in files the PR doesn't touch, say so: the branch was cut before a registry-wide change, it isn't
    the author's error, and merging `main` in fixes it (#890, #892). A job that shows `failure` with no jobs and no log
    is a CI hiccup: re-run it before judging (#1052, #1015).
+   **`--require-portable` errors on entries the PR doesn't touch, right after another PR changed them on `main`**: before
+   2026-11-23 the step compared the PR with the tip of `main` instead of the base it was merged with, so a listing merged while
+   the run was queued looked changed by the PR (#1094, #1096, #1099 after #1101). Fixed in `catalog.yml`; for a run from before
+   the fix, update the branch (a re-run reuses the old merge commit).
    **`expected one asset matching X-*, found 0` in a repo with several entries**, while the author's asset is on its release, is
    release selection: another entry's newer release was judged as this one's. A tag that starts with a digit (`8x8-vst-v1.0.0`)
    and `--require-portable` building only the entry under review used to cause it (#1041, fixed 2026-11-21 in `catalog_build.py`).
@@ -91,7 +95,7 @@ Run it in order: the first items are mechanical and catch most problems.
     `id` nor the `name` may take another author's plugin. A second port of the same plugin gets a distinct name and `id`
     (e.g. "OB-Xd by 3dthc"), or the existing author agrees to hand over their entry (#448, #453, #463). The `name` doesn't
     include "OpenMPC", because that reads as published by this project (#845).
-11. **`kind`, `style`, `tags`** match what the plugin is. If `min_os` is set it is `"3.10.1"` (CI enforces the value) and
+11. **`kind`, `style`, `tags`** match what the plugin is (CI checks `style` is on the kind's list in `catalog/styles.json`; you check it is the right one, and that a PR adding a style to that file is needed). If `min_os` is set it is `"3.10.1"` (CI enforces the value) and
     the plugin really needs MPC OS 3.10.1 or later: its README or `tested.json` says so. It only hides the card on older
     OS versions (`docs/CATALOG.md`), so a reviewer may approve it; ask the author if nothing supports it.
 
@@ -128,6 +132,12 @@ mention `@open-mpc/maintainers` with one line on why. Hand over when:
   name, skin or screenshot that may carry a brand.
 - **Risky calls:** the plugin opens network sockets or runs programs, or the entry adds or changes `flags_reviewed`.
   Only a maintainer sets `flags_reviewed`.
+- **Alternative OS entries** (`catalog/alt_os.json`): always. Check the zip against the entry (stock binary hash check, no rootfs
+  writes, `boot_skip`, `content` claims, bundled plugins) and that the device report is real, then hand over; a maintainer sets `flags_reviewed`.
+- **Other sources listings** (`catalog/listings/`): always. Check that `tools/catalog_listings.py` passes, the shop page works and
+  matches the listing (name, price, closed or source-available), the plugin is not built from GPL code without its source, there is no
+  ROM, firmware or other company's branding, and for a paid listing the support contact and refund policy exist; then hand over
+  (`docs/POLICY.md`, "Other sources").
 - **Trust fields:** `featured`, `tier`, `depends`, `conflicts`, `devices`, `retire`, or a new collection. (`min_os` is not one: it is an author opt-out, checked in item 11.)
 - **Ownership doubt:** the PR author isn't clearly the repo owner, or an entry changes `repo` or `author`.
 - **A yank or a delisting request**, a security report, or a complaint from another author or company.

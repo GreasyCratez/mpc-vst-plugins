@@ -22,7 +22,8 @@ content folder and register it from a file inside it (Locrian's builds; verified
   Plugin Skins/        the skin
   <extras>             any engine data, next to the .so (relative paths like `engine/` for MODULE_SUBDIR)
 ```
-`install.sh` / `uninstall.sh` (`sh install.sh [-y] [-t <synths-dir>]`, default target `/sdcard/Synths`) copy the folder in,
+`install.sh` / `uninstall.sh` (`sh install.sh [-y] [-t <synths-dir>]`; without `-t` they pick the folder this MPC OS loads
+from: `<drive>/VST2 Plugins` on MPC OS 3.10.1 and later, `/sdcard/Synths` before it) copy the folder in,
 register it with `%payload-path%` replaced by the Synths folder, and replace an older entry of the same `uid` (an old
 `/sdcard/vst/...` install is not duplicated). Files the user adds inside the folder are kept across upgrades and
 uninstalls: the paths in the manifest's `user_data` (folders where the user puts ROMs, kits or banks, given to `release.py`
@@ -88,11 +89,11 @@ Warnings (need a human look): `install.sh`/`uninstall.sh`/`plugin_list.awk` diff
 ```json
 { "id": "my-synth", "name": "My Synth", "author": "Someone", "repo": "someone/my-synth-vst",
   "kind": "instrument", "license": "MIT", "summary": "One line.",
-  "style": "synth", "tags": ["poly"], "source_available": false,
+  "style": "polysynth", "tags": ["poly"], "source_available": false,
   "screenshot": "optional https URL", "youtube": "optional https://youtu.be/... link", "asset_pattern": "*-mpc-armv7.zip" }
 ```
 `tip` (optional) is an https tip-jar link (ko-fi.com, buymeacoffee.com, github.com/sponsors, patreon.com, liberapay.com, paypal.me, opencollective.com); `catalog.json` copies it and the popup shows a Tip button. `youtube` (optional) is a `youtube.com` or `youtu.be` https link (a video or playlist, at most 200 characters, no spaces); `catalog.json` copies it
-to the plugin item and the catalog page's popup shows a Video button next to Copy link. `style` (one slug) and `tags` (slugs) are optional and drive the site filters. `role` is optional, `"midi"` only, and only on an `instrument`: the plugin is a MIDI generator or sequencer that plays other tracks (or outboard gear) rather than making its own sound; the catalog page and the installer list it under their MIDI tab instead of Instruments. A synth with a built-in arpeggiator is not `midi`. `source_available: true` is required
+to the plugin item and the catalog page's popup shows a Video button next to Copy link. `style` (one of the fixed styles for the entry's kind in `catalog/styles.json`, refused otherwise; an instrument with `role: "midi"` takes the MIDI styles) and `tags` (free slugs) are optional and drive the site filters. `role` is optional, `"midi"` only, and only on an `instrument`: the plugin is a MIDI generator or sequencer that plays other tracks (or outboard gear) rather than making its own sound; the catalog page and the installer list it under their MIDI tab instead of Instruments. A synth with a built-in arpeggiator is not `midi`. `source_available: true` is required
 when `license` is not on the open-source list; the site shows a "Restricted use" badge.
 No version fields: they are read from the releases (or, for `build-yourself`, the git tags). `id` must equal the manifest `id`, `repo` the manifest
 `source_repo`. Stable releases are GitHub releases that are not prereleases; prereleases form the beta channel.
@@ -150,9 +151,10 @@ no valid tag, script missing at the newest tag, and (loudly, `LICENCE RISK`) a G
 `LICENSE`/`COPYING` file gets a version warning. There is no zip, so no `catalog_check.py`, sha256 or size.
 
 ## `catalog.json` (generated)
-`{"schema": 1, "generated": <ISO time>, "plugins": [ <registry fields> + "versions": [ <record>, ... ], "latest",
+`{"schema": 1, "generated": <ISO time>, "attribution": {"source", "url", "license", "license_url", "text"}, "plugins": [ <registry fields> + "versions": [ <record>, ... ], "latest",
 "latest_beta", "downloads", "updated", "tier", "verified_on", "bar_missing", "featured", "maintenance"? ]}`, versions
-newest first. A record is what `catalog_check.py --json` prints (`version`, `size`, `sha256` of the zip,
+newest first. `attribution` (2026-11-23) is the credit line and licence of the compilation (`catalog/LICENSE-DATA.md`); readers ignore it, and
+installers and managers are unaffected. `feed.xml` and the per-plugin feeds carry the same text in `<rights>`. A record is what `catalog_check.py --json` prints (`version`, `size`, `sha256` of the zip,
 `param_compat`, `max_glibc`, `os_compat`, `os_compat_why`, `cpu`, `defer`, `requires`, `manifest`, and for an addin `hooks`) plus `url`, `date`, `channel` (`stable`|`beta`), `notes`, `yanked`
 and `tested` (`[{device, firmware, date}]`), added by the builder. `tier` is `verified`|`listed`|`experimental`; `verified_on`
 (`[]`, or `gen1`, `gen2` and/or `sample`) says which devices the newest stable release was tested on: a `tested` device naming the MPC
@@ -277,6 +279,50 @@ refuses an invalid file). `{"schema": 1, "apps": [...]}`, each app:
 | `screenshot` | optional https URL of a picture for the card (as a plugin's `screenshot`: 1280×628, the plugin area's shape, fits best; the card shows it at 2:1) |
 
 `tools/app_resolve.py` runs in the Catalog build workflow (nightly, on pushes to `main` touching the catalog, and by hand) and writes `catalog/dist/apps.json`, which `catalog_site.py` prefers over `catalog/apps.json`. The sha256 is the asset's GitHub `digest`, else its line in a `SHA256SUMS` asset of the same release; an asset with neither is left out and reported. A failed read keeps the pinned `downloads`, so a bad night does not blank a card. A new release therefore appears on the next build, with no PR to this repo.
+
+## Alternative OS (`catalog/alt_os.json`) (2026-11-22, offline: unit tests and a headless-browser check of the tab)
+Standalone apps that replace the stock MPC app at boot, for the MPC Sample (issue #958) or for the standalone MPCs and Force. Not plugins,
+not part of `catalog.json`, `catalog.tsv` or any installer. The site shows them on one tab that follows the device switch: **Alt OS**
+(entries with `device` `mpc`) under MPC / Force, **MPC Sample OS** (`device` `mpc-sample`) under MPC Sample. `alt_os.json` is published
+next to `catalog.json`. Checked by `tools/alt_os_check.py` (CI, and the site build refuses an invalid file). Pinned by hand: there is no
+resolver, so a new release is a PR. `{"schema": 1, "systems": [...]}`, each system:
+
+| field | |
+|---|---|
+| `device` | required: `mpc-sample` or `mpc` (the standalone MPCs and Force) |
+| `models` | required for `mpc`, not allowed for `mpc-sample`: the models it runs on, from MPC Live, MPC Live II, MPC Live III, MPC One, MPC One+, MPC One G2, MPC X, MPC X SE, MPC Key 37, MPC Key 61, MPC Key G2, MPC XL, Force |
+| `id`, `title`, `summary`, `author`, `license`, `repo`, `version` | required, as for companion apps |
+| `release` | required https URL of the release page; `docs` (install/recovery guide) and `screenshot` optional https URLs |
+| `download` | required `{url, sha256}`: the exact release zip |
+| `stock_firmware` | required, non-empty `[{version, binary_hash}]`: the stock versions it starts on and the md5 or sha256 of the stock binary it checks before starting (like `mpc_md5` in `patches.json`) |
+| `tested` | required device reports `[{by, date, version, firmware, covered}]`; `firmware` is one of `stock_firmware`, `device` (required for `mpc`) one of `models`, and at least one report for the listed `version` must cover all of `first-boot`, `normal-use`, `return-to-stock`, `uninstall` |
+| `footprint` | required `{rootfs_writes: false, without_media: "stock", uninstall}`: runs from its card or drive and RAM, booting without it gives the stock device, `uninstall` says how (deleting one folder) |
+| `boot_skip` | required: how to skip it at boot without pulling the card (the stock autorun prompt, or a documented button hold) |
+| `user_data` | required `{changes_stock_data: false, writes_outside: [paths]}`: the stock app's projects, samples and settings are untouched; anything written outside its own folder is listed |
+| `content` | required `{source_complete, third_party_cleared, no_manufacturer_branding}`, all `true`: source for everything it runs (kernel modules included), no third-party banks, samples, ROMs or firmware without permission, no manufacturer branding (principle 6). The reviewer checks these against the zip |
+| `bundled_plugins` | optional `[{id, version, sha256}]`: catalog plugins it ships, unchanged upstream release zips pinned by hash; `id` must exist in `catalog/plugins/` |
+| `flags` | required `{root, kernel_modules, usb_gadget}` (booleans) and `network` (`[{port, auth, purpose}]`, `[]` for none) |
+| `flags_reviewed` | required when any flag is set: `{by, date, flags}`, a maintainer's login and exactly the flags set. Shown on the card with the flags |
+
+## Other sources (`catalog/listings/<id>.json`) (2026-11-23, offline: unit tests and a headless-browser check)
+Closed-source or paid plugins that their developers host and sell themselves: link-only cards on the site's Other sources section
+(policy: `docs/POLICY.md`, "Other sources"). One file per listing, checked by `tools/catalog_listings.py` (also run by
+`catalog_build.py --check-registry`). The build writes the entries, sorted by id, to `listings.json` next to `catalog.json`, and only when
+there is at least one; `catalog.json` and `catalog.tsv` never carry a listing, and the old-address mirror (`catalog_mirror.py`) does not copy
+`listings.json`. The site shows the section only when built with `catalog_site.py --other-sources` and there is a listing. Nothing is
+fetched or resolved: a listing has no versions, zip or checksum. Unknown fields are refused.
+
+| field | |
+|---|---|
+| `id`, `name`, `author`, `summary` | required, as for a registry entry (`id` a lowercase slug and the file name; `summary` at most 350 characters). `id` must not be a plugin in `catalog/plugins/` |
+| `kind` | required: `instrument` or `effect` (no addins) |
+| `source` | required: `closed` or `source-available` (`open` is refused: that plugin belongs in the catalog proper) |
+| `price` | required, at most 40 characters: `Free`, or as the developer prices it (`from $29`). A listing is paid unless the price is `Free` |
+| `shop_url` | required https link: the page where people buy or download it |
+| `support` | required for a paid listing: `{contact, response_days}`, an https link and 1 to 14 |
+| `demo_url`, `homepage`, `screenshot` | optional https links (`screenshot` pinned, as for a registry entry) |
+| `style`, `tags` | optional, as for a registry entry (lowercase slugs, at most 8 tags) |
+| `devices` | optional: `["mpc-sample"]` if the developer says it works on the MPC Sample. A developer claim, shown as one ("Developer says it works on"); MPC / Force leaves out a listing whose only device is the Sample |
 
 ## Portable paths (for engines)
 Engines locate their data next to the `.so` (`wrapper/plugin_dir.h`, `MODULE_SUBDIR`), never at a fixed `/sdcard`.

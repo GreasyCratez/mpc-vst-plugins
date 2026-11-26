@@ -216,6 +216,22 @@ screen (the draw handler, the rack) loads and does nothing on a Live III. A regi
   an MPC Sample through the community service (its `sample` count). A Gen2 build alone is not enough. While nothing qualifies, the view says
   how to add a report. The Gen1/Gen2 Device filter is hidden there; the choice is in the page address (`#plat=sample`) and survives Clear
   filters; the plugin tabs' counts and the "N of M" line follow the switch. "MPC Sample" is in the Works for me device list.
+- **Sections and the device switch (2026-11-23, offline: the site browser tests and screenshots, not yet published).** The page's top row is
+  now sections: Plugins, Addins, Alt OS, Device patches, Companion apps. Inside Plugins a second row picks the kind (All, Instruments, MIDI,
+  Effects); All no longer includes addins, which are their own section on the same grid and filters. The device switch sits inside the
+  open section (Plugins, Addins, Alt OS; not Device patches or Companion apps), labelled "Device", with that section's counts. A section
+  with nothing in it for either device is hidden (Alt OS while `alt_os.json` is empty), so tabs do not come and go with the switch. The
+  Alt OS tab keeps its name; its intro says "MPC Sample OS" under the Sample. The choice is remembered in the browser (`localStorage`
+  key `openmpc.device`); a link's own `plat=` wins. Old links keep working: `#tab=` values are unchanged (`all`, `instrument`, `midi`,
+  `effect`, `addin`, `patches`, `apps`, `altos`).
+  Later the same day (offline, same tests): the device switch sits at the right end of the section's first row (beside the kinds in
+  Plugins); the filter row is Search (short), Tag, Sort by and a "More filters" button that opens Style, Developer, MPC OS, Device
+  and Tier (it opens by itself when a link carries one of them, and shows how many are set). Inside a kind (and in Addins) the
+  styles that kind has on the chosen device show as chips; styles with one entry fold behind "+N more". The Style dropdown stays
+  in step with the chips.
+  Tags are chips too (no Tag dropdown): the tags present in what the section, kind, device and style leave, used by two or more of
+  them, ten at a time ("+N more"), counted without the tag filter itself so you can move from one tag to another; chosen tags show
+  pressed, several must all match, "Clear tags" drops them (2026-11-23, offline: `filters_browser_test.py`).
 - `mpc-store.sh` lists it as `[only for: mpc-sample]` and skips it (not an error) on other devices; the desktop app refuses it there
   (`CatPlugin.ForDevice`) and marks it. Both tell the Sample by its settings file (`MPC Sample.settings`); `MPC_STORE_DEVICE` overrides.
 - The quality bar asks for a Sample test (`tested-sample`) instead of Gen1 and Gen2 ones.
@@ -248,6 +264,48 @@ screen (the draw handler, the rack) loads and does nothing on a Live III. A regi
   published releases (2026-10-26) nothing is listed. A first version that warned on every overlap was dropped the same day as noise.
   Not caught: a conflict with something outside the catalog (a firmware or launcher addon), and an addin that replaces `dlsym` itself, which changes
   how every other addin finds the next function (commander, fixed 2026-10-13).
+
+### Alternative OS entries (2026-11-22, offline: unit tests and a headless-browser check; no entries yet)
+Issue #958 (RHYTHMER OS) asked to list a replacement OS for the MPC Sample, which fits none of plugins, device patches or companion apps.
+The maintainers agreed to a separate tab with its own manifest. The same rules suit upcoming alternative OS for the standalone MPCs,
+so it is one list, `catalog/alt_os.json` (named "alternative OS", not firmware: these run on the stock kernel and system and only take
+the MPC app's place) (`device` `mpc-sample` or `mpc`; fields: CATALOG_SPEC.md "Alternative OS"), checked by
+`tools/alt_os_check.py`, on one tab that follows the device switch (MPC Sample OS / Alt OS). The rules follow the requirements proposed in that issue, mapped onto what the catalog already checks:
+a device report (as `tested.json`), pinned stock firmware (as `mpc_md5` in `patches.json`), a pinned zip and sha256, no root filesystem
+writes and a stock Sample without the card, a way to skip it at boot, stock user data left alone, full source and cleared content
+(principle 6), bundled catalog plugins pinned by hash, and root / kernel modules / USB gadget / network services declared and reviewed by a
+maintainer (`flags_reviewed`, as for plugins), all shown on the card. The catalog installs nothing from this tab. Open: whether entries need
+an Experimental tier, and whether bundled plugin hashes should be checked against the plugins' releases at build time (today only the id is).
+
+### Other sources: link-only listings (2026-11-23, offline: unit tests and headless-browser checks; no listings yet)
+Closed-source and paid plugins can be listed as links to the developer's own site, never installed (policy: `POLICY.md`, "Other sources";
+fields: `CATALOG_SPEC.md`). They are kept apart from the registry on purpose: their own directory (`catalog/listings/`) and their own
+output (`listings.json`), so no installer or Plugin Manager can be offered one, even through a bug in a client or the build
+(`catalog.json` is byte-identical with or without listings, tested). On the site, Other sources is a section at the right of the section
+row, shown only when built with `--other-sources` and a listing exists; cards have a grey "Visit developer's site" button (red stays for
+what the catalog installs). While Plugins is searched or filtered, a line says how many listings match the same search, style or tags.
+Not built yet: a nightly check of `shop_url` links, a "not working on MPC OS x.y" marker for the 30-day rule (until then a maintainer edits the summary or delists), and maintainers' device tests shown on the card.
+
+### Fixed styles (2026-11-23, offline: unit tests, the registry check and the site browser tests)
+The site's style chips only help if styles split the catalog: before this, 89 of 153 instruments said `synth` and effects used 28
+free-form styles, half of them on one or two entries. `catalog/styles.json` holds one fixed list per kind (instrument 13, MIDI 4, effect
+13, addin 3, after Schwung's taxonomy), each with a label and the old styles it replaced; `check_entry` refuses a style that is not on
+the list for the entry's kind (MIDI means an instrument with `role: "midi"`). All 319 entries were moved over with `tools/style_map.py
+--apply` (old style, else tags, else a short reviewed override list; `--summary` gives the counts: instruments Polysynth 25, Drum
+machine 21, Sampler & rompler 17, Macro & hybrid 16, Mono & bass 14, Wavetable 14, ...). The site shows the labels. A new style is a
+PR to `styles.json`.
+
+### Reuse by other lists and tools (2026-11-23, no code change)
+`catalog.json` is public and other projects read it: plugin managers, mirrors, community lists, some nightly. One in the wild (checked
+2026-11-23, public repos only) takes the `repo` of every non-experimental, non-build-yourself entry as its starting list, merges it with
+what it already had and never drops a repo, so a plugin we delist or yank can stay on that list; it credits OpenMPC only in a code
+comment. The conditions for reuse are written in `catalog/README.md` "Reusing the catalog: terms": visible credit with a link, honour
+delists, yanks and `experimental`, don't present our review as theirs, don't copy listing content. Why credit is a condition: the
+catalog's value is the maintainers' review and validation (what the registry, `CATALOG_REVIEW.md` and CI do), not the file format.
+What we can and can't do: the entries are facts about other people's plugins, so we can't restrict listing a repo as such; what we
+ask for is credit for the compilation and the review, and that our removals are respected. We don't gate or change `catalog.json`
+for this, since installers read it. A formal data licence (for example CC BY 4.0 on the catalog data, with an attribution field in
+`catalog.json`) would make the credit rule stronger and is a maintainer decision (open): see Risks and open questions.
 
 ### Site
 Generated static HTML (`tools/catalog_site.py`, no JS framework): searchable/filterable grid, a page per plugin
@@ -310,6 +368,13 @@ here first and move to its own repo (recommended, for community ownership) once 
       be rebuilt, even if its release asset is later replaced); a closed "repo cannot be read" title reopens if the
       repo breaks again, since that one isn't tied to a fixed tag; duplicates close. Issues on the plugin's own
       repo: not done.
+- [x] (2026-11-24, offline unit tests; not yet seen in a real outage) Server errors are not plugin problems. On 2026-11-23
+      raw.githubusercontent.com answered `503 Backend.max_conn reached` for 29 plugins' `tested.json` in one build: the
+      published catalog dropped 19 of them from `verified` to `listed`, and 29 "cannot be read" issues opened (#1120-#1148)
+      that wrongly said a release was excluded. Now every GitHub read retries a 5xx, 429 or timeout (`RETRY_DELAYS`, 4 tries);
+      a `tested.json` that still fails keeps that plugin's test results from the published catalog (`--previous`, which the
+      workflow passes); and the problem is marked `transient`, which opens no issue and leaves an open one as it is. A 404 (no
+      file) or a file that won't parse is handled as before. A "cannot be read" issue's text now says what could not be read.
 - [x] (`.github/workflows/catalog.yml`, builds and uploads an artifact; Pages deploy comes with Phase 3) Workflow: nightly cron + `repository_dispatch`/`workflow_dispatch`; an optional one-line "ping" step ports
       can add to their release workflow for instant updates.
 - [x] (registry rules and licence list; 'latest release validates' runs in the full build) PR check for registry PRs: schema, repo exists, latest release validates, uid unique. Issue template
@@ -354,7 +419,7 @@ Locrian's installer uses a drop-in folder in `Synths` (`docs/CATALOG_SPEC.md`, "
 - [x] Re-release the current plugins in the new layout and test on a device (done 2026-10-02, verified on a Force): Dexed 1.0.4, JV-880 1.0.5, Acid 1.0.3, Crate Digger 1.1.5, Maze Voice 1.0.1, Maze Sequencer 1.0.1; Monomodule 0.10.2 and Machinemodule 0.3.6 are build-yourself (per-user builds go through `release.py`, so they are portable). Euclidier stays parked.
 - [x] Guides (Install, Build, Workflow; Setup was merged into Build on 2026-10-01) checked against the new layout (2026-09-30): Install's manual steps use `plugin-meta.xml`,
       and it has "If a plugin disappears after a restart". Site cards carry no layout-specific text (`index.template.html`).
-- [x] Old-layout releases are flagged (2026-10-13, offline: `tools/test_catalog.py`): warning in `catalog_check.py`, a builder problem for a newest stable release, and a PR check (`--require-portable`) for new or changed registry entries. Prompted by a third-party port whose release zip still used `/sdcard/vst` and did not show up in plugin managers.
+- [x] Old-layout releases are flagged (2026-10-13, offline: `tools/test_catalog.py`): warning in `catalog_check.py`, a builder problem for a newest stable release, and a PR check (`--require-portable`) for new or changed registry entries. Prompted by a third-party port whose release zip still used `/sdcard/vst` and did not show up in plugin managers. Since 2026-11-23 (offline: `ChangedEntriesTest`) the PR check skips entries whose only change is site metadata (`style`, `tags`, `summary`; `tools/changed_entries.py`), so a bulk edit such as moving every entry to the fixed styles does not rebuild every listed plugin.
 - [x] Stray registry files are rejected (2026-10-15, offline: `tools/test_catalog.py`): `--check-registry` fails on any `*.json` directly in `catalog/` other than `added.json`, `apps.json`, `patches.json` and `yanked.json`. The build only reads `catalog/plugins/*.json`, so an entry added one folder too high (GitHub's "Create file" in `catalog/`) used to pass CI and never be listed (Fretty, #447).
 - [x] Published releases still in the old layout dropped off a list-rebuilding scanner (NOTES 2026-09-30); all current plugins were re-released above, so the scanner and the catalog agree.
 
@@ -408,6 +473,11 @@ Locrian's installer uses a drop-in folder in `Synths` (`docs/CATALOG_SPEC.md`, "
 - **Non-GitHub hosting.** Start GitHub-only; the registry's `repo` field can grow a `releases_url` later.
 - **Authors not using `release.py`.** Support them by documenting the manifest; the validator is the contract.
 - **Rate limits / token.** One nightly run with the Actions token is far below limits for hundreds of plugins.
+- **Data licence for the catalog (chosen 2026-11-23, offline: unit tests; not yet merged).** The repo is MIT, which covers code, not the
+  published data. Decision: the compilation is held by "the OpenMPC maintainers" (`MAINTAINERS.md`) under CC BY 4.0 (`catalog/LICENSE-DATA.md`);
+  CC BY over ODC-BY for recognition, and because the draft already excludes plugin text and screenshots, which stay their authors'. Added: an
+  `attribution` field in `catalog.json`, `<rights>` in the feeds and a footer line on the site and plugin pages. `catalog.tsv` is unchanged:
+  it is positional. Compat (2026-11-23, run offline on a maintainer's machine with `tools/compat/run.sh`: the published catalog plus the one new `attribution` key against Plugin Manager v0.2.0 and v0.2.5 and desktop installers v0.5.5 and v1.1.2): every client showed the same output (Discover, Installed, Updates, detail pages, per-arch download picks), and `catalog.tsv` is unchanged. This is not a full rebuild from the branch, but the branch adds nothing else to `catalog.json` (the diff to `catalog_build.py` is the constant and the key). Still to do before merging: a legal read of `catalog/LICENSE-DATA.md`.
 - **Catalog scope creep.** Every feature that needs a server, a DB or manual curation is out of scope by default.
 
 ## Client addresses during the organization move (2026-10-20, offline tests only; new address live 2026-11-01)

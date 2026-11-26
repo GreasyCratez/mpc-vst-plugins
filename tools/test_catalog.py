@@ -15,6 +15,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import app_check  # noqa: E402
+import alt_os_check  # noqa: E402
 import catalog_check  # noqa: E402
 import deps  # noqa: E402
 
@@ -277,6 +278,22 @@ class Vst2Test(Base):
         self.assertEqual(e, [])
         self.assertTrue(json.loads(zipfile.ZipFile(z).read("Test-Synth-1.2.0/mpc-plugin.json"))["vst2"])
 
+    def test_knob_fx_goes_into_an_effects_plugin_json(self):
+        """gen_vst.py's build/knob-fx.json, next to the entry, becomes plugin.json's knobs (the MPC Sample's Knob FX, 1.4+)."""
+        kfx = {"knobs": [{"parameter": 2, "label": "Ref"}, {}, {"parameter": 0, "label": "Mix"}], "shiftKnobs": [{"parameter": 1, "label": "Mute"}],
+               "shortName": "Tst", "other": 1}
+        json.dump(kfx, open(os.path.join(self.tmp, "knob-fx.json"), "w"))
+        global ENTRY
+        old, ENTRY = ENTRY, ENTRY.replace('isInstrument="1"', 'isInstrument="0"').replace('numInputs="0"', 'numInputs="2"')
+        try:
+            pj = self.pj(self.build())
+        finally:
+            ENTRY = old
+        self.assertEqual(pj["kind"], "effect")
+        self.assertEqual((pj["knobs"], pj["shiftKnobs"], pj["shortName"]), (kfx["knobs"], kfx["shiftKnobs"], "Tst"))
+        self.assertNotIn("other", pj)
+        self.assertNotIn("knobs", self.pj(self.build()))   # an instrument has no Knob FX
+
     def test_aarch64_uses_file64(self):
         z = self.build(machine=183, glibc=b"GLIBC_2.34")
         pj = self.pj(z)
@@ -525,6 +542,7 @@ class CatalogTest(Base):
 
 
 import catalog_build  # noqa: E402
+import catalog_listings  # noqa: E402
 
 
 class TilePresetTest(Base):
@@ -802,7 +820,15 @@ class AddinTest(Base):
 
     def test_installer_shell_tests(self):
         """tools/test_addin.sh: the LD_PRELOAD installer against scratch systemd trees."""
-        r = subprocess.run(["bash", os.path.join(HERE, "test_addin.sh")], capture_output=True, text=True)
+        # It fakes a read-only root with file permissions, which root ignores: as root, run it as an unprivileged user (as CI does).
+        drop = []
+        if hasattr(os, "geteuid") and os.geteuid() == 0 and shutil.which("setpriv"):
+            import pwd
+            try:
+                pwd.getpwnam("nobody"); drop = ["setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups"]
+            except KeyError:
+                pass
+        r = subprocess.run(drop + ["bash", os.path.join(HERE, "test_addin.sh")], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-2000:])
 
 
@@ -884,6 +910,62 @@ class BuildTest(Base):
         v = cat["plugins"][0]["versions"][0]
         self.assertNotIn("sdk", v["assets"])
         self.assertTrue(any("SDK zip not listed" in w for w in v["warnings"]), v["warnings"])
+
+    def test_tested_json_server_error_keeps_the_published_results(self):
+        """raw.githubusercontent.com answered 503 for 29 plugins (2026-11-23) and every one of them lost its badges and got an issue.
+        A server error keeps the results of the published catalog (--previous) and is marked transient; a bad file is still ignored."""
+        import urllib.error
+        z = self.build("1.0.0")
+        rel = self.rel("v1.0.0", 1)
+        live = {"device": "MPC Live II", "firmware": "3.10.1", "date": "2026-11-15"}
+        previous = {"plugins": [{"id": "test-synth", "versions": [{"version": "1.0.0", "tested": [live]}]}]}
+
+        class Busy(FakeGitHub):
+            def tested(self, repo):
+                raise urllib.error.HTTPError("https://raw/x", 503, "Backend.max_conn reached", {}, None)
+
+        class Bad(FakeGitHub):
+            def tested(self, repo):
+                raise ValueError("Expecting value: line 1 column 1")
+        for gh, kept in ((Busy, [live]), (Bad, [])):
+            cat, problems = catalog_build.build([self.ENTRY], gh({"acme/test-synth": [rel]}, {1: z}),
+                                                os.path.join(self.tmp, "cache-" + gh.__name__), set(), previous=previous)
+            self.assertEqual(cat["plugins"][0]["versions"][0]["tested"], kept, gh.__name__)
+            p = [p for p in problems if "tested.json" in p["error"]]
+            self.assertEqual(len(p), 1, problems)
+            self.assertEqual(p[0].get("transient", False), gh is Busy, p)
+        self.assertEqual(catalog_build.previous_tested(None), {})
+
+    def test_github_reads_retry_server_errors_only(self):
+        import io
+        import urllib.error
+        calls = []
+
+        def fake(codes):
+            def urlopen(req, timeout=None):
+                calls.append(req.full_url)
+                c = codes.pop(0)
+                if c != 200:
+                    raise urllib.error.HTTPError(req.full_url, c, "x", {}, None)
+                return io.BytesIO(b'[{"version": "1.0.0", "device": "MPC One"}]')
+            return urlopen
+        old, delays = catalog_build.urllib.request.urlopen, catalog_build.RETRY_DELAYS
+        catalog_build.RETRY_DELAYS = (0, 0, 0)
+        try:
+            catalog_build.urllib.request.urlopen = fake([503, 429, 200])
+            self.assertEqual(catalog_build.GitHub().tested("acme/x")[0]["device"], "MPC One")
+            self.assertEqual(len(calls), 3)
+            calls.clear(); catalog_build.urllib.request.urlopen = fake([404])
+            self.assertEqual(catalog_build.GitHub().tested("acme/x"), [])   # no tested.json: not retried
+            self.assertEqual(len(calls), 1)
+            calls.clear(); catalog_build.urllib.request.urlopen = fake([502, 502, 502, 502])
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                catalog_build.GitHub()._get("https://api.github.com/x")
+            self.assertTrue(catalog_build.transient(cm.exception))
+            self.assertEqual(len(calls), 4)
+            self.assertFalse(catalog_build.transient(urllib.error.HTTPError("u", 403, "x", {}, None)))
+        finally:
+            catalog_build.urllib.request.urlopen, catalog_build.RETRY_DELAYS = old, delays
 
     def sdk_only_zip(self, version="1.0.0"):
         """An Akai SDK-format zip as Akai's tools make it: one folder, binaries in VST/, no per-build zips."""
@@ -1326,6 +1408,22 @@ class BuildTest(Base):
         self.assertEqual(by["tool"]["versions"], [])
         self.assertTrue(any("only for the MPC Sample" in str(x) for x in problems), problems)
 
+    def test_attribution_is_published_everywhere(self):
+        """2026-11-23 draft: the credit line is in catalog.json, every feed and both page footers, and they say the same thing."""
+        import catalog_site
+        self.assertEqual(catalog_build.ATTRIBUTION["text"], catalog_site.RIGHTS)
+        self.assertEqual(catalog_build.ATTRIBUTION["license"], "CC-BY-4.0")
+        gh = FakeGitHub({"acme/test-synth": [self.rel("v1.0.0", 1)]}, {1: self.build("1.0.0")})
+        cat, _ = catalog_build.build([self.ENTRY], gh, os.path.join(self.tmp, "attr"), set())
+        self.assertEqual(cat["attribution"], catalog_build.ATTRIBUTION)
+        self.assertIn("open-mpc.github.io", cat["attribution"]["text"])
+        self.assertIn("<rights>%s</rights>" % catalog_site.RIGHTS, catalog_site.atom(cat))
+        here = os.path.join(os.path.dirname(__file__), "catalog_site")
+        for name in ("index.template.html", "page.template.html"):
+            html = open(os.path.join(here, name), encoding="utf-8").read()
+            self.assertIn("CC BY 4.0", html, name)
+            self.assertIn("reusing-the-catalog-terms", html, name)
+
     def test_quality_bar(self):
         gh = FakeGitHub({"acme/test-synth": [self.rel("v1.0.0", 1)]}, {1: self.build("1.0.0")})
         cat, _ = catalog_build.build([self.ENTRY], gh, os.path.join(self.tmp, "bar"), set())
@@ -1670,6 +1768,234 @@ class CollectionTest(Base):
 import catalog_issues  # noqa: E402
 
 
+class ListingsTest(unittest.TestCase):
+    """Other sources (tools/catalog_listings.py): closed or paid plugins the developer hosts; advertisement only."""
+    L = {"id": "pro-synth", "name": "Pro Synth", "author": "Acme", "kind": "instrument", "source": "closed",
+         "price": "from $29", "shop_url": "https://acme.example/pro-synth", "summary": "A synth.",
+         "support": {"contact": "https://acme.example/help", "response_days": 7}}
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def write(self, *entries):
+        d = os.path.join(self.tmp, "catalog", "listings")
+        os.makedirs(d, exist_ok=True)
+        for e in entries:
+            json.dump(e, open(os.path.join(d, e["id"] + ".json"), "w"))
+        return d
+
+    def test_a_valid_listing_passes_and_extra_fields_are_refused(self):
+        self.assertEqual(catalog_listings.check_listing(self.L), [])
+        full = dict(self.L, demo_url="https://acme.example/demo", homepage="https://acme.example", style="synth",
+                    tags=["wavetable"], devices=["mpc-sample"], screenshot="https://acme.example/s.png")
+        self.assertEqual(catalog_listings.check_listing(full), [])
+        for extra in ({"repo": "acme/pro-synth"}, {"distribution": "release"}, {"sha256": "0" * 64}, {"license": "MIT"}):
+            self.assertTrue(catalog_listings.check_listing(dict(self.L, **extra)), extra)
+
+    def test_open_source_belongs_in_the_catalog_not_here(self):
+        errs = catalog_listings.check_listing(dict(self.L, source="open"))
+        self.assertTrue(any("catalog proper" in x for x in errs), errs)
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, source="free")))
+        self.assertEqual(catalog_listings.check_listing(dict(self.L, source="source-available")), [])
+
+    def test_links_must_be_https_with_no_spaces(self):
+        for k in ("shop_url", "demo_url", "homepage", "screenshot"):
+            for bad in ("http://acme.example/x", "javascript:alert(1)", "https://acme.example/a b", "acme.example", "https://"):
+                self.assertTrue(catalog_listings.check_listing(dict(self.L, **{k: bad})), (k, bad))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, shop_url="https://acme.example/" + "x" * 300)))
+
+    def test_paid_needs_support_within_14_days_and_free_does_not(self):
+        no_support = {k: v for k, v in self.L.items() if k != "support"}
+        self.assertTrue(catalog_listings.check_listing(no_support))
+        self.assertEqual(catalog_listings.check_listing(dict(no_support, price="Free")), [])
+        self.assertEqual(catalog_listings.check_listing(dict(no_support, price=" free ")), [])
+        for days in (0, 15, "7", True, 7.5):
+            sup = {"contact": "https://acme.example/help", "response_days": days}
+            self.assertTrue(catalog_listings.check_listing(dict(self.L, support=sup)), days)
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, support={"contact": "mailto:a@b.c", "response_days": 3})))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, support={"contact": "https://a.example/h", "response_days": 3, "x": 1})))
+
+    def test_devices_tags_and_limits_follow_the_registry_vocabulary(self):
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, devices=["mpc-live"])))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, devices=[])))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, tags=["Bad Tag"])))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, tags=["t%d" % i for i in range(9)])))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, summary="x" * 351)))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, price="x" * 41)))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, kind="addin")))
+        self.assertTrue(catalog_listings.check_listing(dict(self.L, id="Bad_Id")))
+
+    def test_load_catches_duplicates_a_plugin_id_and_a_wrong_file_name(self):
+        d = self.write(self.L, dict(self.L, id="other"))
+        listings, problems = catalog_listings.load_listings(d)
+        self.assertEqual((len(listings), problems), (2, []))
+        _, problems = catalog_listings.load_listings(d, plugin_ids={"pro-synth"})
+        self.assertTrue(any("already a plugin" in m for _, m in problems), problems)
+        json.dump(self.L, open(os.path.join(d, "renamed.json"), "w"))
+        _, problems = catalog_listings.load_listings(d)
+        self.assertTrue(any("<id>.json" in m for _, m in problems), problems)
+        open(os.path.join(d, "broken.json"), "w").write("{")
+        _, problems = catalog_listings.load_listings(d)
+        self.assertTrue(any("invalid JSON" in m for _, m in problems), problems)
+
+    def test_listings_json_is_written_only_when_there_is_something_to_list(self):
+        out = os.path.join(self.tmp, "dist")
+        self.assertIsNone(catalog_listings.write_listings([], out))
+        self.assertFalse(os.path.exists(os.path.join(out, "listings.json")))
+        dest = catalog_listings.write_listings([dict(self.L, id="zeta"), self.L], out)
+        doc = json.load(open(dest))
+        self.assertEqual(doc["listings_version"], 1)
+        self.assertEqual([x["id"] for x in doc["listings"]], ["pro-synth", "zeta"])
+
+    def test_check_registry_covers_listings_and_the_plugin_files_never_carry_one(self):
+        reg = os.path.join(self.tmp, "catalog", "plugins")
+        os.makedirs(reg)
+        self.write(self.L)
+        run = lambda: subprocess.run([sys.executable, os.path.join(HERE, "catalog_build.py"), "--check-registry", "--registry", reg,
+                                      "--added", os.path.join(self.tmp, "none.json")], capture_output=True, text=True)
+        r = run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("1 listings", r.stdout)
+        self.assertEqual(os.listdir(reg), [])   # the listing is not in the plugin registry
+        self.write(dict(self.L, shop_url="http://acme.example/x"))
+        r = run()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("shop_url", r.stderr)
+
+    def test_the_site_page_is_off_by_default_and_listings_never_reach_installer_files(self):
+        dist = os.path.join(self.tmp, "dist")
+        os.makedirs(dist)
+        shutil.copy(os.path.join(HERE, "catalog_site", "fixture-catalog.json"), os.path.join(dist, "catalog.json"))
+        catalog_listings.write_listings([self.L], dist)
+        site = lambda *extra: subprocess.run([sys.executable, os.path.join(HERE, "catalog_site.py"), "--catalog", os.path.join(dist, "catalog.json"),
+                                              "--out", os.path.join(self.tmp, "site"), "--patches", os.path.join(self.tmp, "none"),
+                                              "--apps", os.path.join(self.tmp, "none"), *extra], capture_output=True, text=True)
+        out = os.path.join(self.tmp, "site")
+        r = site()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(out, "listings.json")))
+        self.assertNotIn('id="tab-other"', open(os.path.join(out, "index.html"), encoding="utf-8").read())
+        shutil.rmtree(out)
+        r = site("--other-sources")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        page = open(os.path.join(out, "index.html"), encoding="utf-8").read()   # a section of the Catalog page, not a page of its own
+        self.assertIn('id="tab-other"', page)
+        self.assertIn("Pro Synth", page)
+        self.assertIn("Visit developer", page)
+        self.assertFalse(os.path.exists(os.path.join(out, "other-sources.html")))
+        for f in ("catalog.json", "catalog.tsv"):
+            self.assertNotIn("pro-synth", open(os.path.join(out, f), encoding="utf-8").read(), f)
+        json.dump({"listings_version": 1, "listings": [dict(self.L, shop_url="javascript:alert(1)")]}, open(os.path.join(dist, "listings.json"), "w"))
+        r = site("--other-sources")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("listings.json is not valid", r.stderr)
+
+    def test_the_build_writes_listings_beside_catalog_json_and_leaves_catalog_json_alone(self):
+        """Offline stand-in for tools/compat/run.sh (needs Docker): catalog.json is byte-identical with and without listings, so the
+        released Plugin Managers and installers, which read only it and catalog.tsv, see the same catalog."""
+        reg = os.path.join(self.tmp, "catalog", "plugins")
+        os.makedirs(reg)
+        build = lambda out: subprocess.run([sys.executable, os.path.join(HERE, "catalog_build.py"), "--registry", reg, "--out", out,
+                                            "--cache", os.path.join(self.tmp, "cache"), "--added", os.path.join(self.tmp, "none.json")],
+                                           capture_output=True, text=True)
+        a, b = os.path.join(self.tmp, "a"), os.path.join(self.tmp, "b")
+        r = build(a)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.write(self.L)
+        r = build(b)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # "generated" is the build time to the second: two builds can straddle a second boundary, so leave it out of the comparison
+        load = lambda d: {k: v for k, v in json.load(open(os.path.join(d, "catalog.json"))).items() if k != "generated"}
+        self.assertEqual(load(a), load(b))
+        self.assertFalse(os.path.exists(os.path.join(a, "listings.json")))
+        self.assertEqual(json.load(open(os.path.join(b, "listings.json")))["listings"][0]["id"], "pro-synth")
+
+    def test_the_old_address_mirror_redirects_the_page_and_does_not_copy_listings_json(self):
+        import catalog_mirror
+        site, out = os.path.join(self.tmp, "site"), os.path.join(self.tmp, "mirror")
+        os.makedirs(site)
+        for f, body in (("catalog.json", "{}"), ("catalog.tsv", ""), ("listings.json", "{}"), ("other-sources.html", "<html></html>"), ("index.html", "<html></html>")):
+            open(os.path.join(site, f), "w").write(body)
+        copied, redirected = catalog_mirror.mirror(site, out, "https://open-mpc.github.io/")
+        self.assertNotIn("listings.json", copied)
+        self.assertFalse(os.path.exists(os.path.join(out, "listings.json")))
+        self.assertIn("other-sources.html", redirected)
+        self.assertIn("https://open-mpc.github.io/other-sources.html", open(os.path.join(out, "other-sources.html")).read())
+
+
+
+class ChangedEntriesTest(unittest.TestCase):
+    """tools/changed_entries.py: which entries the PR check re-checks for the portable layout."""
+
+    def test_needs_check(self):
+        import changed_entries as ce
+        e = {"id": "x", "repo": "a/b", "kind": "effect", "style": "reverb", "tags": ["a"], "summary": "s", "license": "MIT"}
+        self.assertTrue(ce.needs_check(None, e))                                         # new entry
+        self.assertFalse(ce.needs_check(e, dict(e, style="delay", tags=["b"], summary="t")))   # site-only edits
+        self.assertTrue(ce.needs_check(e, dict(e, repo="a/c")))                          # what releases are read from
+        self.assertTrue(ce.needs_check(e, dict(e, asset_pattern="*-x.zip")))             # a field added
+        self.assertTrue(ce.needs_check(e, {k: v for k, v in e.items() if k != "license"}))   # a field removed
+        self.assertTrue(ce.needs_check(e, None))                                         # not valid JSON
+
+    def test_against_git(self):
+        import changed_entries as ce
+        with tempfile.TemporaryDirectory() as t:
+            g = lambda *a: subprocess.run(["git", "-C", t] + list(a), check=True, capture_output=True)
+            g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+            os.makedirs(os.path.join(t, "catalog", "plugins"))
+            w = lambda n, e: json.dump(e, open(os.path.join(t, "catalog", "plugins", n + ".json"), "w"))
+            base = {"id": "a", "repo": "o/a", "kind": "effect", "style": "eq"}
+            w("a", base); w("b", dict(base, id="b", repo="o/b"))
+            g("add", "-A"); g("commit", "-qm", "base")
+            w("a", dict(base, style="filter-eq")); w("b", dict(base, id="b", repo="o/b2")); w("c", dict(base, id="c", repo="o/c"))
+            g("add", "-A"); g("commit", "-qm", "head")
+            cwd = os.getcwd(); os.chdir(t)
+            try:
+                self.assertEqual(sorted(ce.changed("HEAD^1", "HEAD")), ["b", "c"])   # a: style only, skipped
+            finally:
+                os.chdir(cwd)
+
+
+class StyleMapTest(unittest.TestCase):
+    """tools/style_map.py and catalog/styles.json: the fixed styles per kind."""
+
+    def test_styles_file_is_well_formed(self):
+        import style_map
+        styles = json.load(open(os.path.join(os.path.dirname(HERE), "catalog", "styles.json")))["styles"]
+        self.assertEqual(sorted(styles), ["addin", "effect", "instrument", "midi"])
+        for kind, items in styles.items():
+            ids = [x["id"] for x in items]
+            self.assertEqual(len(ids), len(set(ids)), kind)
+            froms = [f for x in items for f in x["from"]]
+            self.assertEqual(len(froms), len(set(froms)), kind)   # an old style maps to one new style
+        for k, v in style_map.OVERRIDES.items():
+            self.assertTrue(any(v in {x["id"] for x in items} for items in styles.values()), (k, v))
+
+    def test_propose(self):
+        import style_map
+        styles = json.load(open(os.path.join(os.path.dirname(HERE), "catalog", "styles.json")))["styles"]
+        p = lambda **e: style_map.propose(dict({"id": "x", "kind": "instrument", "tags": []}, **e), styles)[0]
+        self.assertEqual(p(style="electric-piano"), "keys-organ")                 # from an old style
+        self.assertEqual(p(style="synth", tags=["wavetable", "polyphonic"]), "wavetable")   # tags, first rule wins
+        self.assertEqual(p(style="synth", tags=["acid"]), "mono-bass")
+        self.assertEqual(p(style="synth"), None)                                  # needs a decision
+        self.assertEqual(p(kind="effect", style="saturation"), "distortion")
+        self.assertEqual(p(kind="instrument", role="midi", style="sequencer", tags=["euclidean"]), "generative")
+        self.assertEqual(p(id="roads", style="synth", tags=["polyphonic"]), "keys-organ")   # a reviewed override wins
+
+    def test_every_live_entry_is_on_the_list(self):
+        import style_map
+        entries, problems = catalog_build.load_registry(os.path.join(os.path.dirname(HERE), "catalog", "plugins"))
+        self.assertEqual([m for _, m in problems if "styles.json" in m], [])
+
+    def test_site_shows_labels(self):
+        import catalog_site
+        labels = json.loads(catalog_site.style_labels())
+        self.assertEqual(labels["mono-bass"], "Mono & bass")
+        self.assertNotIn("utility", labels)   # different labels per kind: left to the slug ("Utility")
+
+
 class IssuesTest(unittest.TestCase):
     T = "Catalog: a %s failed validation"
 
@@ -1723,6 +2049,18 @@ class IssuesTest(unittest.TestCase):
         self.assertEqual([t for t, _ in got], ["Catalog: c cannot be read"])
         self.assertEqual([n for n, _ in close], [10, 11, 13])
         self.assertIn("newer release", close[0][1])
+
+    def test_transient_problem_opens_nothing_and_keeps_its_open_issue(self):
+        pr = [{"id": "a", "tag": None, "transient": True, "error": "tested.json not read (HTTP Error 503): kept 2 published test results"},
+              {"id": "b", "tag": None, "transient": True, "unreadable": True, "error": "cannot list releases: HTTP Error 502"},
+              {"id": "c", "tag": None, "error": "tested.json ignored: Expecting value"}]
+        issues = [{"number": 1, "title": "Catalog: a cannot be read", "state": "OPEN"},   # from an earlier, real problem: not judged now
+                  {"number": 2, "title": "Catalog: b v1 failed validation", "state": "OPEN"}]   # b unreadable: left alone
+        got, close = catalog_issues.plan(pr, issues)
+        self.assertEqual([t for t, _ in got], ["Catalog: c cannot be read"])
+        self.assertEqual(close, [])
+        self.assertIn("could not read part of this plugin's data", got[0][1])
+        self.assertNotIn("excluded", got[0][1])
 
     def test_cannot_be_read_reopens_but_a_per_tag_title_never_does(self):
         # a tagless title's repo can go from unreadable to readable (closing its issue) and back to
@@ -1842,7 +2180,10 @@ class SiteTest(unittest.TestCase):
     def test_registry_style_and_source_available(self):
         e = dict(BuildTest.ENTRY, license="MAME license")
         self.assertTrue(catalog_build.check_entry(e))
-        self.assertEqual(catalog_build.check_entry(dict(e, source_available=True, style="rompler", tags=["jv-880"])), [])
+        self.assertEqual(catalog_build.check_entry(dict(e, source_available=True, style="sampler-rompler", tags=["jv-880"])), [])
+        self.assertTrue(any("catalog/styles.json" in x for x in catalog_build.check_entry(dict(BuildTest.ENTRY, style="rompler"))))   # not on the fixed list
+        self.assertEqual(catalog_build.check_entry(dict(BuildTest.ENTRY, kind="effect", style="reverb")), [])
+        self.assertTrue(catalog_build.check_entry(dict(BuildTest.ENTRY, kind="effect", style="polysynth")))   # an instrument style on an effect
         self.assertTrue(catalog_build.check_entry(dict(BuildTest.ENTRY, style="Bad Style")))
 
     def test_registry_license_expression(self):
@@ -2559,13 +2900,15 @@ class InstallerTest(Base):
                    MPC_TEST_LOG=os.path.join(self.tmp, "mpc_ctl.log"), MPC_MOUNTS=self.mounts)
         return subprocess.run(["sh", os.path.join(self.top, script), "-y", *args], cwd=self.top, env=env, capture_output=True, text=True)
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "as root the install really writes into /media/<card>/Synths on this "
+                     "machine (card paths must be under /media); CI runs as a normal user, where the copy is refused after the folder is chosen")
     def test_on_an_mpc_sample_no_t_means_the_sd_card(self):
         """The MPC Sample has a read-only root: without -t the installer takes its card's Synths folder (the one MPC lists, on a card
         that is mounted), never /sdcard/Synths, and says when no card is in."""
         self.sample_device(["/usr/share/x/Synths", "/media/OLD CARD/Synths", "/media/MY CARD/Synths"], ["/media/MY CARD", "/media/az01-internal"])
         r = self.run_default("install.sh")
         self.assertIn("using /media/MY CARD/Synths (the MPC Sample's SD card)", r.stdout)
-        self.assertNotIn("/sdcard", r.stdout + r.stderr)
+        self.assertNotIn("/sdcard/Synths", r.stdout + r.stderr)   # never the internal Synths folder (removing an old /sdcard/vst copy is fine)
         self.sample_device([], ["/media/SD2"])           # MPC has not listed it yet: the mounted card
         self.assertIn("using /media/SD2/Synths", self.run_default("install.sh").stdout)
         self.sample_device(["/media/MPCSD/Synths"], [])  # no card in
@@ -3329,6 +3672,109 @@ class AppResolveTest(unittest.TestCase):
         self.assertEqual(len(app_check.check(bad)[0]), 1)
         no_source = self.doc(); del no_source["apps"][0]["release"]; del no_source["apps"][0]["assets"]
         self.assertIn("needs 'release'", app_check.check(no_source)[0][0])
+
+
+class AltOsTest(unittest.TestCase):
+    """tools/alt_os_check.py and the Alt OS tab (MPC Sample OS / Alt OS): entry requirements agreed in issue #958."""
+
+    SHA = "ab" * 32
+
+    def doc(self):
+        return {"schema": 1, "systems": [{
+            "id": "test-os", "title": "Test OS", "device": "mpc-sample", "summary": "A groovebox OS.", "author": "Someone", "license": "AGPL-3.0-only",
+            "repo": "o/test-os", "release": "https://github.com/o/test-os/releases/tag/v1.0.0", "version": "1.0.0",
+            "download": {"url": "https://github.com/o/test-os/releases/download/v1.0.0/test-os-sd.zip", "sha256": self.SHA},
+            "stock_firmware": [{"version": "1.3.0.12", "binary_hash": "cd" * 16}],
+            "tested": [{"by": "tester", "date": "2026-11-20", "version": "1.0.0", "firmware": "1.3.0.12",
+                        "covered": ["first-boot", "normal-use", "return-to-stock", "uninstall"]}],
+            "footprint": {"rootfs_writes": False, "without_media": "stock", "uninstall": "Delete the TestOS folder from the card."},
+            "boot_skip": "Answer No at the stock autorun prompt.",
+            "user_data": {"changes_stock_data": False, "writes_outside": []},
+            "content": {"source_complete": True, "third_party_cleared": True, "no_manufacturer_branding": True},
+            "flags": {"root": True, "kernel_modules": False, "usb_gadget": False,
+                      "network": [{"port": 80, "auth": False, "purpose": "web upload over USB"}]},
+            "flags_reviewed": {"by": "a-maintainer", "date": "2026-11-21", "flags": ["root", "network"]}}]}
+
+    def errs(self, doc):
+        return alt_os_check.check(doc)[0]
+
+    def test_repo_file_and_valid_entry(self):
+        root = os.path.dirname(HERE)
+        self.assertEqual(alt_os_check.check(json.load(open(os.path.join(root, "catalog", "alt_os.json"))))[0], [])
+        self.assertEqual(self.errs(self.doc()), [])
+
+    def test_device_report_must_cover_everything_for_the_listed_version(self):
+        d = self.doc(); d["systems"][0]["tested"][0]["covered"].remove("return-to-stock")
+        self.assertTrue(any("missing return-to-stock" in x for x in self.errs(d)))
+        d = self.doc(); d["systems"][0]["tested"][0]["version"] = "0.9.0"
+        self.assertTrue(any("no complete device report" in x for x in self.errs(d)))
+        d = self.doc(); d["systems"][0]["tested"] = []
+        self.assertTrue(any("at least one device report" in x for x in self.errs(d)))
+        d = self.doc(); d["systems"][0]["tested"][0]["firmware"] = "2.0"
+        self.assertTrue(any("stock_firmware's versions" in x for x in self.errs(d)))
+
+    def test_system_and_user_data_left_alone_and_content_cleared(self):
+        for path, val, msg in ((("footprint", "rootfs_writes"), True, "rootfs_writes"), (("footprint", "without_media"), "custom", "without_media"),
+                               (("user_data", "changes_stock_data"), True, "changes_stock_data"), (("content", "third_party_cleared"), False, "third_party_cleared"),
+                               (("content", "no_manufacturer_branding"), None, "no_manufacturer_branding")):
+            d = self.doc(); d["systems"][0][path[0]][path[1]] = val
+            self.assertTrue(any(msg in x for x in self.errs(d)), msg)
+        d = self.doc(); d["systems"][0]["download"]["sha256"] = "x"
+        self.assertTrue(any("download needs" in x for x in self.errs(d)))
+        d = self.doc(); del d["systems"][0]["boot_skip"]
+        self.assertIn("systems[0]: missing 'boot_skip'", self.errs(d))
+
+    def test_flags_need_a_matching_maintainer_review(self):
+        d = self.doc(); d["systems"][0]["flags"]["kernel_modules"] = True
+        self.assertTrue(any("flags_reviewed" in x and "kernel_modules" in x for x in self.errs(d)))
+        d = self.doc(); del d["systems"][0]["flags_reviewed"]
+        self.assertTrue(any("flags_reviewed" in x for x in self.errs(d)))
+        d = self.doc(); s = d["systems"][0]; s["flags"] = {"root": False, "kernel_modules": False, "usb_gadget": False, "network": []}; del s["flags_reviewed"]
+        self.assertEqual(self.errs(d), [])
+        d = self.doc(); del d["systems"][0]["flags"]["usb_gadget"]
+        self.assertTrue(any("flags must say" in x for x in self.errs(d)))
+
+    def test_bundled_plugins_are_pinned_catalog_entries(self):
+        d = self.doc(); d["systems"][0]["bundled_plugins"] = [{"id": "no-such-plugin", "version": "1.0.0", "sha256": self.SHA}]
+        self.assertEqual(self.errs(d), [])
+        plugins = os.path.join(os.path.dirname(HERE), "catalog", "plugins")
+        self.assertTrue(any("not a catalog plugin" in x for x in alt_os_check.check(d, plugins)[0]))
+        d["systems"][0]["bundled_plugins"][0]["sha256"] = ""
+        self.assertTrue(any("bundled_plugins[0]" in x for x in self.errs(d)))
+
+    def test_device_and_models(self):
+        d = self.doc(); d["systems"][0]["device"] = "force"
+        self.assertTrue(any("device must be one of" in x for x in self.errs(d)))
+        d = self.doc(); s = d["systems"][0]; s["device"] = "mpc"
+        self.assertTrue(any("models must list" in x for x in self.errs(d)))
+        s["models"] = ["MPC Live II", "MPC One"]
+        self.assertTrue(any("device must be one of the entry's models" in x for x in self.errs(d)))
+        s["tested"][0]["device"] = "MPC One"
+        self.assertEqual(self.errs(d), [])
+        s["models"].append("MPC Sample")
+        self.assertTrue(any("models must list" in x for x in self.errs(d)))
+        d = self.doc(); d["systems"][0]["models"] = ["MPC One"]
+        self.assertTrue(any("only for device" in x for x in self.errs(d)))
+
+    def test_card_shows_flags_report_and_download(self):
+        import catalog_site
+        html = catalog_site.alt_os_cards(self.doc())
+        for needle in ("Runs as root", "port 80 (no auth)", "1.0.0 by tester on stock 1.3.0.12, 2026-11-20", "Answer No at the stock autorun prompt.",
+                       "test-os-sd.zip", self.SHA, "a-maintainer, 2026-11-21"):
+            self.assertIn(needle, html)
+        self.assertIn('data-device="mpc-sample"', html)
+
+    def test_site_tab(self):
+        root = os.path.dirname(HERE)
+        with tempfile.TemporaryDirectory() as t:
+            json.dump(self.doc(), open(os.path.join(t, "os.json"), "w"))
+            subprocess.run([sys.executable, os.path.join(HERE, "catalog_site.py"), "--catalog", os.path.join(HERE, "catalog_site", "fixture-catalog.json"),
+                            "--alt-os", os.path.join(t, "os.json"), "--out", os.path.join(t, "site")], cwd=root, check=True, capture_output=True)
+            html = open(os.path.join(t, "site", "index.html"), encoding="utf-8").read()
+            self.assertTrue(os.path.isfile(os.path.join(t, "site", "alt_os.json")))
+        self.assertIn('id="tab-altos"', html)
+        self.assertIn("<h2>Test OS</h2>", html)
+        self.assertNotIn("/*ALT_OS_HTML*/", html)
 
 
 class MirrorTest(unittest.TestCase):

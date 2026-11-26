@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['catalog/**', 'tools/catalog_*.py', 'tools/app_*.py', 'tools/catalog_site/**', 'tools/skin_compat.py', 'tools/skin_roles_2x.json', 'tools/test_skin_compat.py', 'tools/sdk_*.py', 'tools/test_sdk_*.py', 'tools/release.py', 'tools/release/**']
+    paths: ['catalog/**', 'tools/catalog_*.py', 'tools/app_*.py', 'tools/catalog_site/**', 'tools/skin_compat.py', 'tools/skin_roles_2x.json', 'tools/test_skin_compat.py', 'tools/sdk_*.py', 'tools/test_sdk_*.py', 'tools/release.py', 'tools/release/**', 'tools/gen_vst.py', 'tools/test_knob_fx.py']
   pull_request:
-    paths: ['catalog/**', 'tools/catalog_*.py', 'tools/app_*.py', 'tools/catalog_site/**', 'tools/skin_compat.py', 'tools/skin_roles_2x.json', 'tools/test_skin_compat.py', 'tools/sdk_*.py', 'tools/test_sdk_*.py', 'tools/release.py', 'tools/release/**']
+    paths: ['catalog/**', 'tools/catalog_*.py', 'tools/app_*.py', 'tools/catalog_site/**', 'tools/skin_compat.py', 'tools/skin_roles_2x.json', 'tools/test_skin_compat.py', 'tools/sdk_*.py', 'tools/test_sdk_*.py', 'tools/release.py', 'tools/release/**', 'tools/gen_vst.py', 'tools/test_knob_fx.py']
 permissions:
   contents: write   # the sdk-converted release (converted SDK zips); everything else only reads
   issues: write
@@ -22,12 +22,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # a PR checks out its merge commit; HEAD^1 is the base it was merged with
       - name: Tests
         run: python3 tools/test_catalog.py
       - name: Install page drive writer tests
         run: node tools/test_drivewrite.mjs
       - name: SDK-format zip tests
         run: python3 tools/test_sdk_zip.py && python3 tools/test_sdk_release.py
+      - name: Knob FX mapping tests
+        run: python3 tools/test_knob_fx.py
       - name: Site downloads tests
         run: python3 tools/test_site_downloads.py
       - name: Skin compatibility tests
@@ -39,16 +43,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git fetch --depth=1 origin "${{ github.base_ref }}"
-          ids=$(git diff --name-only --diff-filter=AM "origin/${{ github.base_ref }}" -- catalog/plugins | xargs -r -n1 basename | sed 's/\.json$//')
+          # Compare with the base this merge commit was built on, not the base branch's tip: a listing merged
+          # after the run was queued would otherwise look changed by this PR (#1094, #1096, #1099).
+          # Only new entries and entries changed beyond site-only metadata (style, tags, summary): tools/changed_entries.py.
+          ids=$(python3 tools/changed_entries.py HEAD^1 HEAD)
           [ -z "$ids" ] || python3 tools/catalog_build.py --require-portable $ids
       - name: Validate the companion apps
         run: python3 tools/app_check.py
+      - name: Validate the alternative OSes
+        run: python3 tools/alt_os_check.py
       - name: Build the catalog
         if: ${{ github.event_name != 'pull_request' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 tools/catalog_build.py
+        # --previous: a tested.json the server won't hand over (5xx after retries) keeps its published results
+        run: python3 tools/catalog_build.py --previous https://open-mpc.github.io/catalog.json
       - name: Host the converted SDK zips (releases that carry only an Akai SDK zip; uploaded once, never replaced)
         # catalog_build.py converted them into per-build zips and listed this release's URLs for them; they must exist before the site goes out
         if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
@@ -71,7 +80,7 @@ jobs:
         run: python3 tools/catalog_issues.py
       - name: Generate the site
         if: ${{ github.event_name != 'pull_request' }}
-        run: python3 tools/catalog_site.py
+        run: python3 tools/catalog_site.py --other-sources   # the Other sources section appears only once catalog/listings/ has a listing (docs/CATALOG_SPEC.md)
       - name: Copy the Install page's downloads into the site (pinned, catalog/downloads.json)
         if: ${{ github.event_name != 'pull_request' }}
         run: python3 tools/site_downloads.py

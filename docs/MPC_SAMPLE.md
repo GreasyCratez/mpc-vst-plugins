@@ -16,7 +16,7 @@ follow the NOTES dates for those.
 | Controls | Buttons, pads, pots, dial are a separate controller on a UART, read by MPC as `/dev/snd/midiC0D0` (rawmidi, ALSA timestamped frames) | device (NOTES 2026-11-04) |
 | Audio | AK4558 stereo codec on I2S, 44.1 kHz, period 128. USB-C is a gadget: UAC2 audio + MIDI + NCM (the SSH link) | device; gadget functions also in the kernel config |
 | Power, radios | Mains only. **No Wi-Fi or Bluetooth**: the nodes are in the shared board file but only another product enables them | device and source |
-| Service, binary, settings | `ac50.service`, process `MPC Sample` (with a space), `/data/Settings/Akai/MPC Sample/MPC Sample.settings` | device (NOTES 2026-11-03/04) |
+| Service, binary, settings | `ac50.service`, process `MPC Sample` (with a space), `/data/Settings/Akai/MPC Sample/MPC Sample.settings` (1.3); `/data/Settings/MPC Sample/MPC Sample.settings` (1.4) | device (NOTES 2026-11-03/04); 1.4 in the emulator (mpc-compat-tests, 2026-11-24) |
 | Plugin key | `pluginList-arm-64bit`, the same aarch64 `.so` as Gen2 | device |
 
 The version string the app shows is "MPC Sample 1.3.0" (its own numbering, not MPC OS 3.x).
@@ -70,10 +70,18 @@ the screen notes 12/13/14, dial CC 100 (relative, 1 = +1, 127 = -1) and press no
 2. Link for **glibc 2.39** at most. A host cross-compiler with a newer glibc leaks `libmvec` symbols (NOTES 2026-11-04: NAM
    was rebuilt in a glibc 2.36 container for that reason).
 3. Add an on-screen page only if you use the draw handler's API (`sample_page` in `vst.json`, offline only so far).
+   On 1.4 an effect is a Knob FX with six params on the knobs: map them with `knob_fx` in `vst.json`, or let the page's
+   first two banks set them (`docs/PORTING.md`, Knob FX).
 4. In the catalog, mark the entry's device limits honestly (Sample-capable or not, and a `Verified Sample` badge only after a
    device check): `docs/CATALOG.md`, NOTES 2026-11-05.
 5. Test on the device with the plugin in a project, MPC stopped while you edit the working copy, `.rack-backup` kept.
 6. Back up `MPC Sample.settings` with MPC stopped before touching it, and stage files as `x.new` then `mv` (repo rule).
+
+### 7. Replacing the stock app instead
+
+A standalone app that takes over from the stock MPC Sample app (an alternative OS) is not a plugin. The catalog lists those on the
+MPC Sample OS tab with stricter rules (device report, stock firmware hash check, nothing written to the system, declared flags):
+`docs/CATALOG_SPEC.md`, "Alternative OS" (2026-11-22).
 
 ## What the source adds beyond our device notes
 

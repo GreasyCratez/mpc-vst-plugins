@@ -25,10 +25,15 @@ Design: `docs/CATALOG.md`. Formats: `docs/CATALOG_SPEC.md`.
    ```json
    { "id": "my-synth", "name": "My Synth", "author": "Your name", "repo": "you/my-synth-vst",
      "kind": "instrument", "license": "MIT", "summary": "One line.",
-     "style": "sampler", "tags": ["rompler"], "screenshot": "optional https URL", "youtube": "optional https://youtu.be/... link", "asset_pattern": "*-mpc-armv7.zip" }
+     "style": "sampler-rompler", "tags": ["rompler"], "screenshot": "optional https URL", "youtube": "optional https://youtu.be/... link", "asset_pattern": "*-mpc-armv7.zip" }
    ```
-   `style` and `tags` (lowercase slugs) feed the site's Style filter and search; pick a short, common word such as
-   `synth`, `sampler`, `drum-machine`, `reverb`, `delay`, `utility`. If your license is not on the open-source list but
+   `style` is one of the fixed styles for your plugin's kind (`catalog/styles.json`, which also has their labels; CI refuses any
+   other); `tags` are free lowercase slugs. Both feed the site's chips and search. The styles:
+   - Instruments: `polysynth`, `mono-bass`, `wavetable`, `fm`, `macro-hybrid`, `physical-modeling`, `keys-organ`, `drum-machine`, `sampler-rompler`, `groovebox`, `experimental`, `dj-players`, `utility`
+   - MIDI (`role: "midi"`): `step-sequencer`, `generative`, `arp-chord`, `utility`
+   - Effects: `reverb`, `delay`, `modulation`, `distortion`, `lofi-tape`, `dynamics`, `filter-eq`, `granular`, `pitch-vocal`, `glitch-performance`, `multi-fx`, `mixing`, `utility`
+   - Addins: `audio`, `control`, `utility`
+   If none fits, propose one in your PR (an entry in `catalog/styles.json`). If your license is not on the open-source list but
    the source is public, add `"source_available": true`: the plugin is listed with a "Restricted use" badge and
    its own license text shown. `screenshot` is an `https://` link to an image (a raw GitHub link to a PNG/JPG in your
    repo, pinned to a tag or commit); the card shows it in a 2:1 frame, cropping other shapes. Anything but `https://` is ignored.
@@ -110,6 +115,25 @@ An addin (a library MPC loads when it starts, through `LD_PRELOAD`) is listed th
 entry. Package it with `tools/release_addin.py` instead of `release.py`: see `docs/ADDINS.md`. If your library replaces a function
 another addin also replaces and either of you doesn't pass the call on (no `dlsym`/`dlvsym` lookup), both cards say so: docs/ADDINS.md.
 
+## Alternative OS
+An app that replaces the stock MPC app at boot is listed from `catalog/alt_os.json` on the site's Alt OS tab: **MPC Sample OS** under
+the MPC Sample switch (`"device": "mpc-sample"`), **Alt OS** under MPC / Force (`"device": "mpc"` plus the `models` it runs on).
+Open a PR adding one object to `systems` (fields: docs/CATALOG_SPEC.md, "Alternative OS"). Before you do, you need: a device report
+on a real device for the version you list (first boot, normal use, returning to the stock app, uninstall), a check of the stock binary's
+hash before starting, nothing written to the root filesystem, the stock device back when booting without your card or drive, a way to skip
+it at boot, the stock app's data left alone, full source (kernel modules too) and no third-party content or manufacturer branding you lack
+permission for. Root, kernel modules, USB gadget changes and network services are fine but must be declared in `flags`; a maintainer
+reviews them and adds `flags_reviewed`, and the card shows them. `python3 tools/alt_os_check.py` checks the file.
+
+## Other sources (closed-source or paid plugins)
+A plugin whose source is closed, or that you sell, can be listed as a link on the site's **Other sources** section. The card links to
+your own site; the catalog hosts no file, shows no checksum and installs nothing, and Plugin Manager and the installers never offer it.
+Free closed-source plugins go here too. Open a PR adding `catalog/listings/<id>.json` (fields: docs/CATALOG_SPEC.md, "Other
+sources"); `python3 tools/catalog_listings.py` checks it. A maintainer reviews every listing against `docs/POLICY.md`, "Other sources":
+no ROMs, firmware or unlicensed samples, no other company's branding, no closed binary built from GPL code; for a paid listing a support
+contact answered within 14 days, a refund policy on your shop page, and licence activation that works offline. If your source is open,
+add your plugin to the catalog proper instead (above).
+
 ## Companion apps
 A desktop tool that works with a standalone MPC but is not a plugin (for example MPC Link) is listed on the site's **Companion apps**
 tab from `catalog/apps.json`, not from `catalog/plugins/`. Open a PR adding one object to `apps`: `id`, `title`, `summary`, `author`,
@@ -183,6 +207,34 @@ is hidden or demoted because of it. The items:
 ## Feed
 The site publishes `feed.xml` (Atom, newest 50 non-yanked releases). Members of a collection released on the same day are one entry.
 
+## Reusing the catalog: terms
+The OpenMPC catalog is maintained by volunteers. Every entry is reviewed by hand against `docs/CATALOG_REVIEW.md`, and every release is
+validated: open-source licence, checksums, a canonical installer, no other company's branding, a yank or delist when something is wrong.
+That review is what the catalog is worth, and the data is published so people can use it. Using it carries these conditions.
+
+**You may** read `catalog.json`, `catalog.tsv` and `feed.xml` (and the `catalog/plugins/*.json` registry) to build a plugin manager, a
+mirror, a community list or any other tool, including one that competes with ours.
+
+**Licence:** the compilation is CC BY 4.0 (`catalog/LICENSE-DATA.md`); `catalog.json` carries the
+credit wording in its `attribution` field. Condition 1 below is the licence's attribution term; 2 to 4 are terms of publication.
+
+**You must:**
+1. **Credit OpenMPC visibly, with a link.** Put "Plugin list from OpenMPC, https://open-mpc.github.io" (or equivalent wording naming
+   OpenMPC and linking it) in your README and on any site or in any app screen that shows the list. A code comment does not count: users
+   have to be able to see where the vetted list comes from. This applies whether you copy the file, mirror it, or use it to decide
+   which repos to list (for example by taking every `repo` from the registry).
+2. **Honour our decisions.** A plugin that has left the catalog, a yanked version and an `experimental` tier must not appear in your
+   copy as a normal, recommended listing. Read the data fresh on every build; do not keep repos from an old read.
+3. **Not present our review as yours.** If you rely on it, say so. If you add your own checks, describe them as yours.
+4. **Not copy listing content.** Summaries, screenshots and skins belong to their authors, and a screenshot or summary may have been
+   edited by our maintainers. Link to the plugin's page or repo instead.
+
+**Not covered here:** the code in this repository is MIT (`LICENSE`), which requires its copyright notice in copies of the code. The
+conditions above are the terms on which OpenMPC publishes the catalog data and its review. If you can't meet them, don't use the data.
+
+Maintainers who find a project that doesn't meet them contact its owner first, point at this section, and ask for the credit or the
+fix. Questions: open an issue on this repo.
+
 ## Yank a release
 Add `"<id>@<version>"` (or `"<id>@*"` for all versions) to `yanked.json`. It stays in the catalog marked yanked and is
 never offered as the latest.
@@ -193,7 +245,9 @@ from one repo by one author without a collection, and on any `*.json` directly i
 `added.json`, `apps.json`, `patches.json` and `yanked.json`: an entry put one folder too high); without the flag it fetches releases (set
 `GITHUB_TOKEN` to avoid API limits) and writes `catalog/dist/catalog.json` and `problems.json`.
 In `problems.json`, `superseded: true` marks a failing release that a newer, unyanked release of the same plugin
-replaces. `python3 tools/catalog_issues.py --dry-run` shows the issues the nightly would open and close.
+replaces; `transient: true` marks a read that failed with a server error or timeout after retries (no issue opens for it;
+`--previous <published catalog.json path or URL>` lets a `tested.json` that failed that way keep its published results).
+`python3 tools/catalog_issues.py --dry-run` shows the issues the nightly would open and close.
 `python3 tools/catalog_site.py` then writes the site to `catalog/dist/site/` (open `index.html`).
 
 ## Guide pages

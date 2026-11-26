@@ -221,14 +221,19 @@ user_md = ("\nYour own files go in %s inside the plugin folder (`%s/%s/`); the i
            % (", ".join("`%s/`" % d for d in a.user_data), SYNTHS, skin_name)) if a.user_data else ""
 REQ_GEN1 = """- A first-generation MPC OS standalone device (32-bit ARM, like the Force, MPC Live / Live II, One, X and Key 61).
   The installer refuses anything else. Newer models are untested.
-- **Root shell access** (SSH) to the device. Stock MPC OS doesn't offer this; you need a modded unit.
-- Tested on MPC OS with a Force. Installing plugins this way is unofficial: back up first, use at your own risk."""
+- **Root shell access** (SSH) to the device, for the scripted install below. Stock MPC OS doesn't offer this; you need a
+  modded unit. On MPC OS 3.10.1 and later you can skip it entirely: copy the plugin folder into `VST2 Plugins` (next section).
+- Installing plugins this way is unofficial: back up first, use at your own risk."""
 REQ_GEN2 = """- A Gen2 MPC OS standalone device (64-bit ARM, aarch64: MPC Live III and the other 64-bit models) on MPC OS 3.x.
   The installer refuses anything else (the 32-bit Force, MPC Live / Live II, One, X and Key 61 need the `-mpc-armv7.zip` build).
-- **Root shell access** (SSH) to the device. Stock MPC OS doesn't offer this; you need a modded unit.
-- Gen2 devices keep plugins in the internal drive's Synths folder, and the folder differs: **`/nvme/Synths`** on a Live III, **`/storage/Synths`**
-  on an MPC One. It must be one of the folders listed under `SynthContentLocations` in `/data/Settings/MPC/MPC.settings` (MPC draws a plugin's
-  skin only from a listed folder): `grep -A6 SynthContentLocations /data/Settings/MPC/MPC.settings`. Use that folder wherever this guide says
+- **Root shell access** (SSH) to the device, for the scripted install below. Stock MPC OS doesn't offer this; you need a
+  modded unit. On MPC OS 3.10.1 and later you can skip it entirely: copy the plugin folder into `VST2 Plugins` (next section).
+- On MPC OS 3.10.1 and later, plugins go in `VST2 Plugins/` at the root of a drive (**`/nvme/VST2 Plugins`** on a Live III),
+  which is not a content location: no `MPC.settings` entry and no `SynthContentLocations` check apply to it.
+- Before MPC OS 3.10.1, Gen2 devices keep plugins in the internal drive's Synths folder, and the folder differs:
+  **`/nvme/Synths`** on a Live III, **`/storage/Synths`** on an MPC One. It must be one of the folders listed under
+  `SynthContentLocations` in `/data/Settings/MPC/MPC.settings` (MPC draws a plugin's skin only from a listed folder):
+  `grep -A6 SynthContentLocations /data/Settings/MPC/MPC.settings`. Use that folder wherever this guide says
   `<your Synths folder>`.
   Tested on an MPC Live III. Installing plugins this way is unofficial: back up first, use at your own risk."""
 install_md = """# {name} {ver}
@@ -239,14 +244,22 @@ install_md = """# {name} {ver}
 
 {requirements}
 
+## MPC OS 3.10.1 and later
+
+With Preferences, Enhancements, **External Plugin Support** on, MPC lists the plugin folders in `VST2 Plugins/` at the root
+of a drive (`/sdcard/VST2 Plugins/` on a Gen1 internal drive, `/nvme/VST2 Plugins/` on a Live III). Copy `portable/{skin}/`
+there and restart MPC: no root shell and no settings edit needed. Create the folder first if the drive hasn't got one yet.
+The scripted install below uses that folder too, and finds it once it exists.
+
 ## Install (scripted)
 
 1. Unzip, then copy the whole folder to the device, e.g. `scp -r {top} root@<device-ip>:/tmp/`
-2. Run it: `ssh root@<device-ip> sh /tmp/{top}/install.sh{install_args}`
+2. Run it: `ssh root@<device-ip> sh /tmp/{top}/install.sh{install_args}`{install_args_note}
 
 The installer checks the device, **stops MPC** (save your project first), copies `portable/{skin}/` (the plugin, its skin
-and its data, as one folder) into `{synths}`, backs up `MPC.settings`, adds the plugin to MPC's plugin list from the
-folder's `plugin-meta.xml` and starts MPC again. Running it again upgrades in place, keeping your own files.
+and its data, as one folder) into the folder this MPC OS loads plugins from (on MPC OS 3.10.1 and later `<drive>/VST2 Plugins`,
+when that folder exists or already holds this plugin; before 3.10.1 `{synths}`; it prints the one it uses), backs up
+`MPC.settings`, adds the plugin to MPC's plugin list from the folder's `plugin-meta.xml` and starts MPC again. Running it again upgrades in place, keeping your own files.
 An older install of this plugin (the previous layout, with the `.so` in `/sdcard/vst`) is replaced, not duplicated.
 `-y` skips the confirmation prompt; `-t <folder>` installs into another Synths folder (for example on a card).
 {user_md}
@@ -258,7 +271,7 @@ and the Q-Links follow the page.
 `ssh root@<device-ip> sh /tmp/{top}/uninstall.sh` removes the plugin folder and the plugin-list entry (it also stops and
 restarts MPC). Projects that use the plugin will load without it. Files you added yourself are kept.
 
-## Install by hand
+## Install by hand (MPC OS before 3.10.1)
 
 1. Copy `portable/{skin}/` to `{synths}/{skin}/`. It holds `{so}`, `plugin-meta.xml`, `version.xml`, `Plugin Skins/`
    and the data:
@@ -283,7 +296,8 @@ rebuild the whole plugin list from the plugin folders in `Synths` keep this plug
 See `SHA256SUMS`. Made with [mpc-vst-plugins](https://github.com/open-mpc/mpc-vst-plugins).
 """.format(name=name, ver=a.version, about=(a.about + "\n\n") if a.about else "", kind=kind, top=top, so=so_name,
            skin=skin_name, extra_md=extra_md, bench=b, user_md=user_md, synths=SYNTHS, listkey="pluginList-arm-64bit" if gen2 else "pluginList-arm",
-           install_args=" -t '<your Synths folder>'" if gen2 else "", requirements=REQ_GEN2 if gen2 else REQ_GEN1,
+           install_args=" -t '<your Synths folder>'" if gen2 else "",
+           install_args_note=" (on MPC OS 3.10.1 and later, leave out `-t`)" if gen2 else "", requirements=REQ_GEN2 if gen2 else REQ_GEN1,
            where="Instrument plugins" if kind == "instrument" else "Insert effects")
 open(os.path.join(root, "INSTALL.md"), "w", newline="\n").write(install_md)
 
@@ -348,6 +362,10 @@ if manifest["arch"] in ("armv7", "aarch64"):
     for k, v in (("description", a.about), ("license", a.license), ("url", "https://github.com/" + a.repo if a.repo else "")):
         if v:
             pj[k] = v
+    # the MPC Sample's Knob FX knobs (1.4+, Akai's SDK docs/knob-fx.md), from gen_vst.py's knob_fx() next to the entry
+    kfx = os.path.join(os.path.dirname(os.path.abspath(a.entry)), "knob-fx.json")
+    if kind == "effect" and os.path.exists(kfx):
+        pj.update({k: v for k, v in json.load(open(kfx)).items() if k in ("knobs", "shiftKnobs", "shortName")})
     open(os.path.join(pdir, "plugin.json"), "w", newline="\n").write(json.dumps(pj, indent=2) + "\n")
     manifest["vst2"] = True
 open(os.path.join(root, "mpc-plugin.json"), "w", newline="\n").write(json.dumps(manifest, indent=2) + "\n")
