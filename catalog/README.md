@@ -25,10 +25,15 @@ Design: `docs/CATALOG.md`. Formats: `docs/CATALOG_SPEC.md`.
    ```json
    { "id": "my-synth", "name": "My Synth", "author": "Your name", "repo": "you/my-synth-vst",
      "kind": "instrument", "license": "MIT", "summary": "One line.",
-     "style": "sampler", "tags": ["rompler"], "screenshot": "optional https URL", "youtube": "optional https://youtu.be/... link", "asset_pattern": "*-mpc-armv7.zip" }
+     "style": "sampler-rompler", "tags": ["rompler"], "screenshot": "optional https URL", "youtube": "optional https://youtu.be/... link", "asset_pattern": "*-mpc-armv7.zip" }
    ```
-   `style` and `tags` (lowercase slugs) feed the site's Style filter and search; pick a short, common word such as
-   `synth`, `sampler`, `drum-machine`, `reverb`, `delay`, `utility`. If your license is not on the open-source list but
+   `style` is one of the fixed styles for your plugin's kind (`catalog/styles.json`, which also has their labels; CI refuses any
+   other); `tags` are free lowercase slugs. Both feed the site's chips and search. The styles:
+   - Instruments: `polysynth`, `mono-bass`, `wavetable`, `fm`, `macro-hybrid`, `physical-modeling`, `keys-organ`, `drum-machine`, `sampler-rompler`, `groovebox`, `experimental`, `dj-players`, `utility`
+   - MIDI (`role: "midi"`): `step-sequencer`, `generative`, `arp-chord`, `utility`
+   - Effects: `reverb`, `delay`, `modulation`, `distortion`, `lofi-tape`, `dynamics`, `filter-eq`, `granular`, `pitch-vocal`, `glitch-performance`, `multi-fx`, `mixing`, `utility`
+   - Addins: `audio`, `control`, `utility`
+   If none fits, propose one in your PR (an entry in `catalog/styles.json`). If your license is not on the open-source list but
    the source is public, add `"source_available": true`: the plugin is listed with a "Restricted use" badge and
    its own license text shown. `screenshot` is an `https://` link to an image (a raw GitHub link to a PNG/JPG in your
    repo, pinned to a tag or commit); the card shows it in a 2:1 frame, cropping other shapes. Anything but `https://` is ignored.
@@ -202,6 +207,34 @@ is hidden or demoted because of it. The items:
 ## Feed
 The site publishes `feed.xml` (Atom, newest 50 non-yanked releases). Members of a collection released on the same day are one entry.
 
+## Reusing the catalog: terms
+The OpenMPC catalog is maintained by volunteers. Every entry is reviewed by hand against `docs/CATALOG_REVIEW.md`, and every release is
+validated: open-source licence, checksums, a canonical installer, no other company's branding, a yank or delist when something is wrong.
+That review is what the catalog is worth, and the data is published so people can use it. Using it carries these conditions.
+
+**You may** read `catalog.json`, `catalog.tsv` and `feed.xml` (and the `catalog/plugins/*.json` registry) to build a plugin manager, a
+mirror, a community list or any other tool, including one that competes with ours.
+
+**Licence:** the compilation is CC BY 4.0 (`catalog/LICENSE-DATA.md`); `catalog.json` carries the
+credit wording in its `attribution` field. Condition 1 below is the licence's attribution term; 2 to 4 are terms of publication.
+
+**You must:**
+1. **Credit OpenMPC visibly, with a link.** Put "Plugin list from OpenMPC, https://open-mpc.github.io" (or equivalent wording naming
+   OpenMPC and linking it) in your README and on any site or in any app screen that shows the list. A code comment does not count: users
+   have to be able to see where the vetted list comes from. This applies whether you copy the file, mirror it, or use it to decide
+   which repos to list (for example by taking every `repo` from the registry).
+2. **Honour our decisions.** A plugin that has left the catalog, a yanked version and an `experimental` tier must not appear in your
+   copy as a normal, recommended listing. Read the data fresh on every build; do not keep repos from an old read.
+3. **Not present our review as yours.** If you rely on it, say so. If you add your own checks, describe them as yours.
+4. **Not copy listing content.** Summaries, screenshots and skins belong to their authors, and a screenshot or summary may have been
+   edited by our maintainers. Link to the plugin's page or repo instead.
+
+**Not covered here:** the code in this repository is MIT (`LICENSE`), which requires its copyright notice in copies of the code. The
+conditions above are the terms on which OpenMPC publishes the catalog data and its review. If you can't meet them, don't use the data.
+
+Maintainers who find a project that doesn't meet them contact its owner first, point at this section, and ask for the credit or the
+fix. Questions: open an issue on this repo.
+
 ## Yank a release
 Add `"<id>@<version>"` (or `"<id>@*"` for all versions) to `yanked.json`. It stays in the catalog marked yanked and is
 never offered as the latest.
@@ -212,7 +245,9 @@ from one repo by one author without a collection, and on any `*.json` directly i
 `added.json`, `apps.json`, `patches.json` and `yanked.json`: an entry put one folder too high); without the flag it fetches releases (set
 `GITHUB_TOKEN` to avoid API limits) and writes `catalog/dist/catalog.json` and `problems.json`.
 In `problems.json`, `superseded: true` marks a failing release that a newer, unyanked release of the same plugin
-replaces. `python3 tools/catalog_issues.py --dry-run` shows the issues the nightly would open and close.
+replaces; `transient: true` marks a read that failed with a server error or timeout after retries (no issue opens for it;
+`--previous <published catalog.json path or URL>` lets a `tested.json` that failed that way keep its published results).
+`python3 tools/catalog_issues.py --dry-run` shows the issues the nightly would open and close.
 `python3 tools/catalog_site.py` then writes the site to `catalog/dist/site/` (open `index.html`).
 
 ## Guide pages

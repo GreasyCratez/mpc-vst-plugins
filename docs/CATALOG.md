@@ -286,6 +286,27 @@ row, shown only when built with `--other-sources` and a listing exists; cards ha
 what the catalog installs). While Plugins is searched or filtered, a line says how many listings match the same search, style or tags.
 Not built yet: a nightly check of `shop_url` links, a "not working on MPC OS x.y" marker for the 30-day rule (until then a maintainer edits the summary or delists), and maintainers' device tests shown on the card.
 
+### Fixed styles (2026-11-23, offline: unit tests, the registry check and the site browser tests)
+The site's style chips only help if styles split the catalog: before this, 89 of 153 instruments said `synth` and effects used 28
+free-form styles, half of them on one or two entries. `catalog/styles.json` holds one fixed list per kind (instrument 13, MIDI 4, effect
+13, addin 3, after Schwung's taxonomy), each with a label and the old styles it replaced; `check_entry` refuses a style that is not on
+the list for the entry's kind (MIDI means an instrument with `role: "midi"`). All 319 entries were moved over with `tools/style_map.py
+--apply` (old style, else tags, else a short reviewed override list; `--summary` gives the counts: instruments Polysynth 25, Drum
+machine 21, Sampler & rompler 17, Macro & hybrid 16, Mono & bass 14, Wavetable 14, ...). The site shows the labels. A new style is a
+PR to `styles.json`.
+
+### Reuse by other lists and tools (2026-11-23, no code change)
+`catalog.json` is public and other projects read it: plugin managers, mirrors, community lists, some nightly. One in the wild (checked
+2026-11-23, public repos only) takes the `repo` of every non-experimental, non-build-yourself entry as its starting list, merges it with
+what it already had and never drops a repo, so a plugin we delist or yank can stay on that list; it credits OpenMPC only in a code
+comment. The conditions for reuse are written in `catalog/README.md` "Reusing the catalog: terms": visible credit with a link, honour
+delists, yanks and `experimental`, don't present our review as theirs, don't copy listing content. Why credit is a condition: the
+catalog's value is the maintainers' review and validation (what the registry, `CATALOG_REVIEW.md` and CI do), not the file format.
+What we can and can't do: the entries are facts about other people's plugins, so we can't restrict listing a repo as such; what we
+ask for is credit for the compilation and the review, and that our removals are respected. We don't gate or change `catalog.json`
+for this, since installers read it. A formal data licence (for example CC BY 4.0 on the catalog data, with an attribution field in
+`catalog.json`) would make the credit rule stronger and is a maintainer decision (open): see Risks and open questions.
+
 ### Site
 Generated static HTML (`tools/catalog_site.py`, no JS framework): searchable/filterable grid, a page per plugin
 (screenshot, description, version history, install steps, source link, checksum, tested-on), a "recently updated"
@@ -347,6 +368,13 @@ here first and move to its own repo (recommended, for community ownership) once 
       be rebuilt, even if its release asset is later replaced); a closed "repo cannot be read" title reopens if the
       repo breaks again, since that one isn't tied to a fixed tag; duplicates close. Issues on the plugin's own
       repo: not done.
+- [x] (2026-11-24, offline unit tests; not yet seen in a real outage) Server errors are not plugin problems. On 2026-11-23
+      raw.githubusercontent.com answered `503 Backend.max_conn reached` for 29 plugins' `tested.json` in one build: the
+      published catalog dropped 19 of them from `verified` to `listed`, and 29 "cannot be read" issues opened (#1120-#1148)
+      that wrongly said a release was excluded. Now every GitHub read retries a 5xx, 429 or timeout (`RETRY_DELAYS`, 4 tries);
+      a `tested.json` that still fails keeps that plugin's test results from the published catalog (`--previous`, which the
+      workflow passes); and the problem is marked `transient`, which opens no issue and leaves an open one as it is. A 404 (no
+      file) or a file that won't parse is handled as before. A "cannot be read" issue's text now says what could not be read.
 - [x] (`.github/workflows/catalog.yml`, builds and uploads an artifact; Pages deploy comes with Phase 3) Workflow: nightly cron + `repository_dispatch`/`workflow_dispatch`; an optional one-line "ping" step ports
       can add to their release workflow for instant updates.
 - [x] (registry rules and licence list; 'latest release validates' runs in the full build) PR check for registry PRs: schema, repo exists, latest release validates, uid unique. Issue template
@@ -391,7 +419,7 @@ Locrian's installer uses a drop-in folder in `Synths` (`docs/CATALOG_SPEC.md`, "
 - [x] Re-release the current plugins in the new layout and test on a device (done 2026-10-02, verified on a Force): Dexed 1.0.4, JV-880 1.0.5, Acid 1.0.3, Crate Digger 1.1.5, Maze Voice 1.0.1, Maze Sequencer 1.0.1; Monomodule 0.10.2 and Machinemodule 0.3.6 are build-yourself (per-user builds go through `release.py`, so they are portable). Euclidier stays parked.
 - [x] Guides (Install, Build, Workflow; Setup was merged into Build on 2026-10-01) checked against the new layout (2026-09-30): Install's manual steps use `plugin-meta.xml`,
       and it has "If a plugin disappears after a restart". Site cards carry no layout-specific text (`index.template.html`).
-- [x] Old-layout releases are flagged (2026-10-13, offline: `tools/test_catalog.py`): warning in `catalog_check.py`, a builder problem for a newest stable release, and a PR check (`--require-portable`) for new or changed registry entries. Prompted by a third-party port whose release zip still used `/sdcard/vst` and did not show up in plugin managers.
+- [x] Old-layout releases are flagged (2026-10-13, offline: `tools/test_catalog.py`): warning in `catalog_check.py`, a builder problem for a newest stable release, and a PR check (`--require-portable`) for new or changed registry entries. Prompted by a third-party port whose release zip still used `/sdcard/vst` and did not show up in plugin managers. Since 2026-11-23 (offline: `ChangedEntriesTest`) the PR check skips entries whose only change is site metadata (`style`, `tags`, `summary`; `tools/changed_entries.py`), so a bulk edit such as moving every entry to the fixed styles does not rebuild every listed plugin.
 - [x] Stray registry files are rejected (2026-10-15, offline: `tools/test_catalog.py`): `--check-registry` fails on any `*.json` directly in `catalog/` other than `added.json`, `apps.json`, `patches.json` and `yanked.json`. The build only reads `catalog/plugins/*.json`, so an entry added one folder too high (GitHub's "Create file" in `catalog/`) used to pass CI and never be listed (Fretty, #447).
 - [x] Published releases still in the old layout dropped off a list-rebuilding scanner (NOTES 2026-09-30); all current plugins were re-released above, so the scanner and the catalog agree.
 
@@ -445,6 +473,11 @@ Locrian's installer uses a drop-in folder in `Synths` (`docs/CATALOG_SPEC.md`, "
 - **Non-GitHub hosting.** Start GitHub-only; the registry's `repo` field can grow a `releases_url` later.
 - **Authors not using `release.py`.** Support them by documenting the manifest; the validator is the contract.
 - **Rate limits / token.** One nightly run with the Actions token is far below limits for hundreds of plugins.
+- **Data licence for the catalog (chosen 2026-11-23, offline: unit tests; not yet merged).** The repo is MIT, which covers code, not the
+  published data. Decision: the compilation is held by "the OpenMPC maintainers" (`MAINTAINERS.md`) under CC BY 4.0 (`catalog/LICENSE-DATA.md`);
+  CC BY over ODC-BY for recognition, and because the draft already excludes plugin text and screenshots, which stay their authors'. Added: an
+  `attribution` field in `catalog.json`, `<rights>` in the feeds and a footer line on the site and plugin pages. `catalog.tsv` is unchanged:
+  it is positional. Compat (2026-11-23, run offline on a maintainer's machine with `tools/compat/run.sh`: the published catalog plus the one new `attribution` key against Plugin Manager v0.2.0 and v0.2.5 and desktop installers v0.5.5 and v1.1.2): every client showed the same output (Discover, Installed, Updates, detail pages, per-arch download picks), and `catalog.tsv` is unchanged. This is not a full rebuild from the branch, but the branch adds nothing else to `catalog.json` (the diff to `catalog_build.py` is the constant and the key). Still to do before merging: a legal read of `catalog/LICENSE-DATA.md`.
 - **Catalog scope creep.** Every feature that needs a server, a DB or manual curation is out of scope by default.
 
 ## Client addresses during the organization move (2026-10-20, offline tests only; new address live 2026-11-01)

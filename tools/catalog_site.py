@@ -19,6 +19,8 @@ import sys
 from html import escape as html_escape
 from xml.sax.saxutils import escape
 
+RIGHTS = "Plugin list data from OpenMPC (https://open-mpc.github.io), licensed CC BY 4.0. Reuse terms: catalog/README.md"   # = catalog_build.ATTRIBUTION["text"]
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import catalog_listings  # noqa: E402
@@ -180,6 +182,14 @@ def render_page(page, pages):
     return tpl
 
 
+def style_labels(path=os.path.join(os.path.dirname(HERE), "catalog", "styles.json")):
+    """{style id: label} from catalog/styles.json, as JSON for the page ("{}" without the file). One id has one label in every kind."""
+    if not os.path.isfile(path):
+        return "{}"
+    labels = {s["id"]: s["label"] for kind in json.load(open(path, encoding="utf-8"))["styles"].values() for s in kind if s["id"] != "utility"}
+    return json.dumps(labels, separators=(",", ":"), ensure_ascii=False).replace("<", "\\u003c")
+
+
 def render(catalog, pages=(), helper_hashes=None, patches_html="", apps_html="", n_patches=0, n_apps=0, fw_html="", n_fw=0, listings_doc=None):
     """The catalog page HTML for a catalog dict. The JSON is embedded in a <script type=application/json>, so '<' is escaped."""
     data = json.dumps(catalog, separators=(",", ":"), ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
@@ -195,6 +205,7 @@ def render(catalog, pages=(), helper_hashes=None, patches_html="", apps_html="",
         .replace("/*ALT_OS_HTML*/", fw_html) \
         .replace("<!--OTHER_TAB-->", site_listings.tab_html() if listings_doc else "") \
         .replace("<!--OTHER_PANEL-->", site_listings.panel_html(listings_doc) if listings_doc else "") \
+        .replace("/*STYLE_LABELS*/", style_labels()) \
         .replace("/*LISTINGS_JSON*/", site_listings.data_json(listings_doc) if listings_doc else "[]").replace(marker, data)
 
 
@@ -222,6 +233,7 @@ def atom(catalog, base="", title="Open MPC - Plugin Catalog: new releases", iden
     out = ['<?xml version="1.0" encoding="utf-8"?>', '<feed xmlns="http://www.w3.org/2005/Atom">',
            "<title>%s</title>" % escape(title), "<id>tag:mpc-vst-catalog,2026:%s</id>" % escape(ident),
            "<updated>%s</updated>" % (items[0][0] + "T00:00:00Z" if items else catalog.get("generated", "1970-01-01T00:00:00Z"))]
+    out.append("<rights>%s</rights>" % escape(RIGHTS))
     if base:
         out.append('<link rel="self" href="%s"/>' % escape(base.rstrip("/") + "/" + path, {'"': "&quot;"}))
     q = {'"': "&quot;"}
@@ -262,6 +274,7 @@ def plugin_atom(p, base="", limit=30):
     out = ['<?xml version="1.0" encoding="utf-8"?>', '<feed xmlns="http://www.w3.org/2005/Atom">',
            "<title>%s: releases</title>" % escape(p["name"]), "<id>tag:mpc-vst-catalog,2026:feed/%s</id>" % escape(p["id"]),
            "<updated>%s</updated>" % (rel[0]["date"] + "T00:00:00Z" if rel else "1970-01-01T00:00:00Z")]
+    out.append("<rights>%s</rights>" % escape(RIGHTS))
     if base:
         out.append('<link rel="self" href="%s"/>' % escape(base.rstrip("/") + "/feed/%s.xml" % p["id"], q))
         out.append('<link rel="alternate" href="%s"/>' % escape(base.rstrip("/") + "/p/%s.html" % p["id"], q))

@@ -22,7 +22,8 @@ content folder and register it from a file inside it (Locrian's builds; verified
   Plugin Skins/        the skin
   <extras>             any engine data, next to the .so (relative paths like `engine/` for MODULE_SUBDIR)
 ```
-`install.sh` / `uninstall.sh` (`sh install.sh [-y] [-t <synths-dir>]`, default target `/sdcard/Synths`) copy the folder in,
+`install.sh` / `uninstall.sh` (`sh install.sh [-y] [-t <synths-dir>]`; without `-t` they pick the folder this MPC OS loads
+from: `<drive>/VST2 Plugins` on MPC OS 3.10.1 and later, `/sdcard/Synths` before it) copy the folder in,
 register it with `%payload-path%` replaced by the Synths folder, and replace an older entry of the same `uid` (an old
 `/sdcard/vst/...` install is not duplicated). Files the user adds inside the folder are kept across upgrades and
 uninstalls: the paths in the manifest's `user_data` (folders where the user puts ROMs, kits or banks, given to `release.py`
@@ -88,11 +89,11 @@ Warnings (need a human look): `install.sh`/`uninstall.sh`/`plugin_list.awk` diff
 ```json
 { "id": "my-synth", "name": "My Synth", "author": "Someone", "repo": "someone/my-synth-vst",
   "kind": "instrument", "license": "MIT", "summary": "One line.",
-  "style": "synth", "tags": ["poly"], "source_available": false,
+  "style": "polysynth", "tags": ["poly"], "source_available": false,
   "screenshot": "optional https URL", "youtube": "optional https://youtu.be/... link", "asset_pattern": "*-mpc-armv7.zip" }
 ```
 `tip` (optional) is an https tip-jar link (ko-fi.com, buymeacoffee.com, github.com/sponsors, patreon.com, liberapay.com, paypal.me, opencollective.com); `catalog.json` copies it and the popup shows a Tip button. `youtube` (optional) is a `youtube.com` or `youtu.be` https link (a video or playlist, at most 200 characters, no spaces); `catalog.json` copies it
-to the plugin item and the catalog page's popup shows a Video button next to Copy link. `style` (one slug) and `tags` (slugs) are optional and drive the site filters. `role` is optional, `"midi"` only, and only on an `instrument`: the plugin is a MIDI generator or sequencer that plays other tracks (or outboard gear) rather than making its own sound; the catalog page and the installer list it under their MIDI tab instead of Instruments. A synth with a built-in arpeggiator is not `midi`. `source_available: true` is required
+to the plugin item and the catalog page's popup shows a Video button next to Copy link. `style` (one of the fixed styles for the entry's kind in `catalog/styles.json`, refused otherwise; an instrument with `role: "midi"` takes the MIDI styles) and `tags` (free slugs) are optional and drive the site filters. `role` is optional, `"midi"` only, and only on an `instrument`: the plugin is a MIDI generator or sequencer that plays other tracks (or outboard gear) rather than making its own sound; the catalog page and the installer list it under their MIDI tab instead of Instruments. A synth with a built-in arpeggiator is not `midi`. `source_available: true` is required
 when `license` is not on the open-source list; the site shows a "Restricted use" badge.
 No version fields: they are read from the releases (or, for `build-yourself`, the git tags). `id` must equal the manifest `id`, `repo` the manifest
 `source_repo`. Stable releases are GitHub releases that are not prereleases; prereleases form the beta channel.
@@ -150,9 +151,10 @@ no valid tag, script missing at the newest tag, and (loudly, `LICENCE RISK`) a G
 `LICENSE`/`COPYING` file gets a version warning. There is no zip, so no `catalog_check.py`, sha256 or size.
 
 ## `catalog.json` (generated)
-`{"schema": 1, "generated": <ISO time>, "plugins": [ <registry fields> + "versions": [ <record>, ... ], "latest",
+`{"schema": 1, "generated": <ISO time>, "attribution": {"source", "url", "license", "license_url", "text"}, "plugins": [ <registry fields> + "versions": [ <record>, ... ], "latest",
 "latest_beta", "downloads", "updated", "tier", "verified_on", "bar_missing", "featured", "maintenance"? ]}`, versions
-newest first. A record is what `catalog_check.py --json` prints (`version`, `size`, `sha256` of the zip,
+newest first. `attribution` (2026-11-23) is the credit line and licence of the compilation (`catalog/LICENSE-DATA.md`); readers ignore it, and
+installers and managers are unaffected. `feed.xml` and the per-plugin feeds carry the same text in `<rights>`. A record is what `catalog_check.py --json` prints (`version`, `size`, `sha256` of the zip,
 `param_compat`, `max_glibc`, `os_compat`, `os_compat_why`, `cpu`, `defer`, `requires`, `manifest`, and for an addin `hooks`) plus `url`, `date`, `channel` (`stable`|`beta`), `notes`, `yanked`
 and `tested` (`[{device, firmware, date}]`), added by the builder. `tier` is `verified`|`listed`|`experimental`; `verified_on`
 (`[]`, or `gen1`, `gen2` and/or `sample`) says which devices the newest stable release was tested on: a `tested` device naming the MPC

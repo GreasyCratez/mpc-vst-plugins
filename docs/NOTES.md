@@ -2808,3 +2808,342 @@ runs on `ubuntu-latest` again (the `ubuntu-24.04` pin of #1086 is gone). The dev
 `dd` cases differ.
 
 - **Catalog build: download cap raised to 128 MiB (2026-11-22, CI log + release API; fix tested offline only).** The `g2-stick-v2.0.0` stick zip is 72,916,787 bytes, over the 64 MiB cap in `tools/site_downloads.py`, so "Copy the Install page's downloads" failed on every push to main (PR runs skip that step, so they stayed green). Both that cap and the Install page reader (`drivewrite.js`) are now 128 MiB. Not yet checked on a real stick or in the deployed Chrome page.
+
+## 2026-11-23: an SDK-format zip from `tools/sdk_zip.py` loads on MPC OS 3.10.1 by folder copy (device, MPC Live Gen1, MPC OS 3.10.1)
+
+Nepenthe 1.0.2's `-mpc-sdk.zip`, made by `tools/sdk_zip.py` from the release's armv7 and aarch64 zips, was unpacked in place of the
+per-build folder at `/sdcard/VST2 Plugins/ikloX - VST - Nepenthe/` with MPC stopped and no settings edit (root was used only to do the
+swap). The folder held `nepenthe-arm32.so` and `nepenthe-arm64.so` at its root, a `plugin.json` with both `file32` and `file64`, and no
+`plugin-meta.xml`. After MPC restarted the plugin was listed, loaded and worked with its skin drawn (owner's check on the screen), and MPC
+left `MPC.settings` byte-identical to a copy taken before the swap. The per-build folder was put back afterwards.
+
+So on a Gen1 unit on 3.10.1, MPC takes the `file32` binary from a folder that holds both, and binaries at the folder root (not in the SDK's
+`VST/`) load, as `sdk_zip.py` assumes. This is the first device result for the format, which RELEASING.md described as offline only.
+**Not verified:** Gen2 (`file64`), the Force, other plugins (REV-246 and Costello Reverb's SDK zips pass `catalog_build.sdk_check` but
+were not loaded), a project saved with the per-build folder reopening on the SDK one, and the catalog site's hand-copy download.
+
+## 2026-11-21: the "empty MPC mode slots" 0x2090, 0x2092, 0x2099 are retired `ModeID` values (offline, from the binary, not run on a device)
+
+Details, addresses and the feasibility notes are in `docs/MPC_MODES.md`. Verified facts only:
+- MPC's `ModeID` enum has screen modes `0x2080..0x20a4` (3.10.1) and popups `0x3080..0x3112`. In `getModeName` (Gen2 3.10.1
+  `b24b7955`: `0x1bed7c0`), 0x2090, 0x2092 and 0x2099 are the only mode-range values with no name. The same three holes are in Gen2
+  3.9.1, 3.10.0, 3.10.1.8 and 3.10.1, Gen1 3.10.0 and Force 3.9.1.2. New modes are appended at the end (0x20a3 Activation in 3.10.0,
+  0x20a4 Developer in 3.10.1), and the only rename is 0x2083, Channel Mixer → Track Mixer.
+- In 3.10.1 `b24b7955`, nothing is registered for the holes: there is no controller `Mode` object (the only inserts into the
+  `std::map<int, Mode*>` are the 68 calls at `0x1631058..0x1631494`), and the touch UI maps them to `TouchDummyPage` (`0x38895cc`,
+  table `0x6712c58`). 0x2090 is still a member of one "sequencer family" bitmask (`0x13331` at `0x16352c4`). 0x2092 and 0x2099 are never
+  loaded as immediates.
+- Name → ID (`0x1bee9e0`, used by Lua `engineMode.RequestModeChange`) compares `getModeName` strings, so a hole is not addressable
+  until something gives it a name. An ID without a controller `Mode` counts as available (`0x1beafc0` returns 1).
+- Modes are compiled C++ (name switch, `*Mode` controller objects, `Touch*Page` pages). `Resources/Pages` and `ACVS/layout` JSON
+  define no modes (Gen2 3.10.0.23, Force 3.10.1.8), so a mode cannot be added by resources alone. 3.10.1 contains a Hermes
+  `TouchJSUIPage` (`Resources/jsui`, `binary.hbc`), but nothing constructs one and the Force 3.10.1.8 image has no `jsui` folder.
+- `tools/mpc_patch/modeslot` (proof-of-concept shim naming 0x2090 "Open MPC") builds, and its offline tests pass: `build.sh test`
+  (aarch64 under qemu, hooking a stand-in with the same entry instructions) and `build.sh check` against the official 3.10.1
+  binary (build-id `8b28179d…b837`; entry `d503233f a9be7bfd 2a0003e1 52862240`; no BTI property note). Not loaded into MPC yet.
+- **Device, 2026-11-22 (Live III, 3.10.1 with the drum-pad copy `b4283ece` bound over `/usr/bin/MPC`):** the drum-pad copy keeps
+  the build-id and `getModeName`'s entry (its changes start at `0x17b20a9`). With `modeslot.so` appended to `LD_PRELOAD` in a
+  `/run` drop-in (`99-modeslot.conf`), MPC logged `modeslot: installed: MPC 3.10.1.12 (f088e9c8427) ...`, the entry in the running
+  process read `ldr x16, #8; br x16; <hook>`, and MPC stayed up (no crash after a minute). Not yet tried: entering the mode (needs a
+  Lua `RequestModeChange("Open MPC")`), `GetAvailableModes`, save/reload with it as the last mode.
+- **Device, 2026-11-22, entering the slot (Live III, shim loaded):** a signed Lua device script calling
+  `mpc.engineMode.RequestModeChange("Open MPC")` (dot form) from `HandleTimer` was accepted: `CurrentMode` went
+  Main Mode → "Open MPC" and the screen showed MPC's placeholder page ("page coming soon", `TouchDummyPage`). MPC did not crash, but
+  the mode buttons did not leave it (no further mode change logged): with no controller `Mode` object for 0x2090 nothing handles
+  them. An MPC restart (script removed) got out. `mpc.engineMode.GetAvailableModes` is nil in 3.10.1, and `mpc` is nil at script
+  top level (only from `OnLoad` on).
+- **Offline, 2026-11-22: modeslot v2.** `TouchDummyPage`'s "page coming soon" is a PNG drawn through
+  `juce::ImageCache::getFromMemory` (not text). The MENU grid stores its tiles by mode name in `MPC.settings`
+  (`ModeMenuPage<p>Slot<s>`, read on the Live III). MPC registers one controller object for Main, Track View, XYFX, Clip
+  Matrix, Navigate, Arrange, Clip Editor and Grid View. The shim now hooks five functions (name, borrowed Main controller,
+  current mode, page picture, MENU icon). `build.sh test` and `build.sh check` pass. Not yet on a device.
+- **Device, 2026-11-22: the slot works as a mode (Live III, modeslot v2, six hooks).** The MENU grid ignored
+  `ModeMenuPage2Slot13 = "Open MPC"` in `MPC.settings` until hook 6. The grid is built from a list of allowed modes
+  (`0x154da40`), and the loader (`0x154c7a0`) only moves modes already in it. With the slot appended to that list it is
+  a tile with our 70×70 icon. Tapping it shows our 1280×800 PNG instead of "page coming soon". Main and Menu leave it
+  (Main Mode's controller registered for 0x2090). Play/Stop and the other controls work while in it (user). The settings
+  entry survived MPC restarts.
+- **Device, 2026-11-22: Mode Slot 0.1.0 as an addin (Live III).** The zip's `install.sh -y` installed to
+  `/data/mpc-addins/modeslot`, added it to the `/run` drop-in, restarted MPC and confirmed MPC loaded it. With no
+  `MPC.settings` entry, MPC put the "Open MPC" tile on the MENU grid itself (with its icon). Tapping it opens the page,
+  and Main or Menu leave it (user). The shim did not stand aside (nothing else claims 0x2090 there). Not yet tried: a
+  reboot (Addin Restore should put it back), `uninstall.sh`.
+- **Device, 2026-11-22: the live page host works (Live III, Mode Slot 0.2.0 + `demo/pagedemo`).** In the slot the
+  demo's frames replace the placeholder, and taps, drags and releases reach it as `down`/`drag`/`up` (hundreds of events
+  in its log), along with `enter`/`leave`. The moving bar shows that frames written between touches get drawn, so the
+  1×1 repaint poll keeps running. MPC did not crash. The page is **1280×628** (between MPC's top and bottom bars), not
+  1280×800: a 1280×800 frame was scaled to fit, and the touches no longer lined up with it. Drawn at the reported size,
+  the cross sits under the finger (user). The first demo redrew for every drag event (a 3 MB PNG each) and fell behind;
+  reading the whole batch of events first, then drawing once, made dragging feel much better (user). The shim now
+  resends `size` every 2 s, so an app started while the page is up learns the size.
+- **Device, 2026-11-22: full height (Live III, modeslot shim with `setBounds`).** Other modes keep a 110 px header
+  band above their page; Developer mode's page runs from y=0 to 738 with only the bottom tab strip (0x2090's placeholder
+  page: 0,110 1280×628). The shim now stretches the page to 0,0 1280×738 on entering. Two device findings:
+  - **The touch UI's member at `+0x6268` is not the page.** It is a holder, and the page pointer is at holder `+0x300`
+    (read from MPC's memory; the holder's getter `0x3881960` is `ldr x0, [x0, #0x300]`). The first build called
+    `setBounds` on `this + 0x6268 + 16` and crashed MPC on entering the slot; MPC restarted itself. The shim now
+    follows the holder and acts only on an object with `TouchDummyPage`'s vtable.
+  - **The header band is a sibling drawn after the page.** Each mode's page sits in a 1280×738 wrapper. The slot's
+    wrapper holds the page and a 1280×110 header component, in that order, so the stretched page was drawn under a
+    black band (user: "top row is cut"). Moving the page to the end of the wrapper's child list (juce::Component:
+    parent at `+0x18`, child array at `+0x40`, count at `+0x4c`) fixed it: the Plugin Manager page fills the screen
+    from the top to the bottom strip, and the header and tabs take taps (user).
+- **Device, 2026-11-22: the whole screen, and the Plugin Manager in the slot (Live III).** The page's parent is the
+  mode's wrapper (vtable `0x7d7fae0`, 0,0 1280×738, one per mode under a 1280×800 parent; MPC's bottom strip is a
+  separate 0,738 1280×62 component drawn before the wrappers). Stretching the wrapper to 800 as well gives the slot the
+  whole screen. The Plugin Manager's daemon draws all five skin tabs there with its own tab bar in the strip, six card
+  rows on PLUGINS (its own engine instance pages by 6), and the status line fitted to its box. Tabs switch, and leaving
+  and coming back works (user). No crash in the log.
+- **Device, 2026-11-22: test restarts fill MPC's filmstrip RAM disk.** After about ten MPC restarts in a day
+  `/var/volatile` (3.9 GB tmpfs) was 100% full (5,362 `temp_*.img`), free RAM was ~350 MB and the Plugin Manager warned
+  that skins would draw black. Deleting `/var/volatile/tmp/filmstrips/temp_*.img` with MPC stopped freed it (free RAM
+  4.6 GB). Clear it during device test sessions that restart MPC often.
+- **2026-11-22: the shim moved to open-mpc/plugin-manager (`modeslot/`).** It is now packaged with the Plugin Manager,
+  whose daemon draws the slot's page; the slot is named "Plugin Manager" and its MENU icon is the Open MPC logo. This
+  section keeps the history under the old path `tools/mpc_patch/modeslot` and the old name "Open MPC".
+- **Device, 2026-11-23: the zip path from scratch (Live III).** With the old Mode Slot removed by its own `uninstall.sh` and the
+  Plugin Manager folder replaced from `OpenMPC-Plugin-Manager-2.1.0-Gen2.zip` (unzipped into `VST2 Plugins`), `Mode-Slot-0.4.0`'s
+  `install.sh -y` installed the addin and restarted MPC. MENU showed a "Plugin Manager" tile with the Open MPC logo. The old
+  tile name stays in `MPC.settings` (`ModeMenuPage2Slot13 = "Open MPC"`, a name MPC no longer knows); whether MENU
+  shows anything for it was not checked. The tile first showed the fallback page (the installed background-server daemon was
+  the old one); loading the plugin once replaced the daemon (`bg_heal`), and the tile then showed the full-screen Manager 2.1.0
+  with its tabs, details, keyboard and menus (user: "works ok").
+- **Device, 2026-11-23: the Plugin Manager app (one addin, no plugin needed; plugin-manager `modeslot/app`).**
+  `Plugin-Manager-App-2.1.0`'s `install.sh -y` (after removing Mode Slot) restarted MPC; the shim ran the app's start script,
+  which unpacked the skin into `/run/openmpc-pm-app`, stopped the plugin's daemon in the `openmpc-pm-daemon` unit and
+  started the app's own there (log `pm-app: stopping the other daemon ... started`). The tile, the full-screen Manager and
+  the web page on :8790 (version 2.1.0) worked without loading the plugin (user). **Reboot:** MPC started without addins;
+  Addin Restore wrote the drop-in at 15.7 s and restarted MPC at 25 s; the shim started the app at 26 s and it replaced
+  the plugin's daemon, which the plugin's own launcher had started at 15.7 s (its once-per-boot guard then left the app's
+  alone). **Bug found and fixed:** cards past the first ~120 thumbnails showed one picture (the page table's option
+  lists, ~3,600 characters, were cut at 1,500 by the page's loader).
+- **Offline, 2026-11-23: Mode Slot profiles for Gen1 MPC and Force, MPC OS 3.10.1.** The shim's 32-bit ARM version (open-mpc/plugin-manager,
+  `modeslot/`) has a profile for the Gen1 MPC 3.10.1 build (`851d050e...`) and for the final Force 3.10.1 build (`1d935334...`; not the
+  3.10.1.8 pre-release, `02639aca...`, which would have been refused). Addresses and what differs from Gen2 (hidden result pointer is `r0`,
+  `Rectangle<int>` in four registers, long-branch veneers, `strd` prologues, `.ARM.exidx` for function starts, `b`-table switches, 4-byte
+  Component layout) are in `docs/MPC_MODES.md`. Done offline only: found from the update images, checked against both binaries by
+  `check_profile_a32.py` (six deliberate profile errors are each reported), and the hooks run through the real patching engine on 32-bit
+  ARM under qemu-user. Not yet on a device (no Gen1 MPC; the Force is on an older MPC OS); the compat emulator runs the real firmware.
+  Also fixed by the 32-bit test: the live page host took the `decodeImage` vtable slot in units of 8 bytes.
+- **Offline, 2026-11-24: the shim on the real Gen1, Force and Gen2 binaries (user-mode emulation).** Running each update image's real `MPC`
+  in a chroot with the shim preloaded (arm32v7 / arm64v8 under Docker binfmt; modeslot/real_mpc_test.sh): Gen2 3.10.1, Gen1 3.10.1 and
+  Force 3.10.1 print `modeslot: installed:` and MPC's own startup runs on; Gen2 3.10.0, Gen1 3.9.1 and the Force's 3.10.1.8 print
+  `modeslot: refused: unknown MPC build-id` and MPC starts as before. MPC stops later for lack of a display (as it does without the
+  shim). The UI path (the tile, the page) was not run: QEngine's full emulation of Gen1 3.10.1 did not get through boot on this host
+  (the guest's 90 s wait for its data device expired under TCG; the harness waits for MPC's first start were fixed-length).
+
+## 2026-11-22: a Quad Cortex mini over USB on a Key 61: silent unless the host plays to it; MPC rejects it as audio device on the rate (device, Key 61, Gen1, MPC OS 3.10.1)
+
+Tried bringing a Neural DSP Quad Cortex mini (`152a:892f`, class-compliant USB audio) into MPC, first as a plugin track
+(MPC USB Bridge 0.2.3, `noxed-mpc-usb-bridge`), then as MPC's own audio device in Preferences. Everything here was seen on the
+device; the user played the guitar through the QC during each capture.
+
+- **How the QC enumerates.** High speed on `ehci-platform` (`usb-ff500000`, a USB-A socket behind the Key 61's internal hub
+  `09e8:504b`), ALSA card `mini`: playback and capture, 8 channels each, S32_LE (24 valid bits), **48000 Hz only**, 125 µs packets.
+  Playback runs in **implicit feedback** mode: its sync endpoint is the capture endpoint (0x82 IN). The Key 61's own cards
+  are `M61` (`09e8:004b`, the keybed's USB audio, full speed) and `ACVM` (internal, not USB).
+- **The QC sends only zeros unless the host is also playing to it.** A capture-only stream delivers frames at the right
+  rate (288000 frames in 6 s), but every sample on all 8 channels is exactly 0. With a second stream playing silence to the QC's
+  playback side, capture carries the signal: ch1 -4.3 dBFS peak / -16.9 RMS, ch2 -5.0 / -16.8, ch3 -21.3 / -34.5, ch4 at the noise floor,
+  ch5-8 zero (QC output set to USB 1/2). Capture and playback can be held by **different processes** (MPC's plugin captures, a
+  helper plays) when both use the same period and buffer (128 / 1024 frames at 48 kHz); no xruns in about 20 minutes.
+- **Capture buffer size mattered (cause not known).** With `snd_pcm_set_params(..., latency)`, a 100 ms or 21.3 ms latency made the
+  first `snd_pcm_readi` fail with EIO and 0 frames, and the stream status never left Stop; 5.3 ms worked every time.
+- **MPC USB Bridge 0.2.3 on the QC:** STATUS STREAMING (`S32 8ch 48.0 kHz (measured 48.00) -> MPC 44.1 kHz, period 128`) but
+  `peak -inf`, because it opens capture only, takes channels 1-2 and never plays to the device. With the helper above running it
+  worked well (user: "tremendously well"), latency reported as 20.1 ms. Other findings: it sends an UpdateDisplay whenever its
+  status text changes, checked every 500 ms, so while audio plays the plugin-picker menu on its track jumps and selects the wrong
+  item (the menu rebuild described in `docs/EMULATOR_PORTS.md`); its report's "Seen, but cannot open audio" verdict is wrong while
+  the Bridge itself holds the capture (EBUSY, owner is MPC's own thread). Reported upstream (molgino/noxend-mpc-plugins#4).
+  The catalog listed it with no installable version: the repo was renamed to `noxend-mpc-plugins` and the registry still named
+  the old one (fixed in #1101).
+- **Installing that release by hand:** the Key 61 has no `/sdcard/Synths`; its plugins are in `<drive>/VST2 Plugins` on the
+  attached drive. The release's `install.sh` is an older template that defaults to `/sdcard/Synths`, so it needs
+  `-t "<drive>/VST2 Plugins"`; with that it installed and MPC restarted cleanly. `/data/Settings/MPC/MPC.settings` and
+  `/media/az01-internal/Settings/MPC/MPC.settings` are the same file (same inode).
+- **Recording a plugin track's sound:** arming the plugin track records MIDI, not audio. The audio track's input list has no
+  Resample entry on this device (seen by the user), even though `/usr/bin/MPC` contains the strings "Resample L", "Resample R"
+  and "Resample L+R". The Sampler's Resample input does record it.
+- **The QC as MPC's audio device (Preferences):** MPC reads the card's mixer controls ("Ignoring non-boolean control Playback
+  Channel Map", ...), then logs `Error: 44100 may not be a supported sample rate on the external device. Code: -22, Message:
+  Invalid argument` twice and `Failed to open ALSA device for capture hw:2`. It opens the device **by card index** (`hw:2`),
+  shows the same error on screen, and falls back to the Key 61's own audio: `Audio 44100Hz; 2-in; 4-out; 192sample buffer`.
+  So on this device MPC's period is 192 frames, not 128. The rate is the only refusal seen; no vendor or model check showed up.
+- **Userland for audio work on this Key 61:** no `arecord`/`aplay`, no `/usr/lib/alsa-lib/` (so ALSA has no speex or libsamplerate
+  converter, and `plughw:` would fall back to linear interpolation), no `/etc/asound.conf`, BusyBox 1.36.1 without `pkill` or
+  `head -c`. `libasound.so.2` is alsa-lib 1.2.11.
+- **What MPC calls, from a trace (`poc/alsatrace`, same day).** MPC opens its audio device as `hw:<index>`, playback then capture, each:
+  `hw_params_any`, `set_access RW_INTERLEAVED`, `set_format S32_LE`, **`set_rate 44100` (exact)**, `set_channels_near 32` (Key 61:
+  4 out, 2 in), `set_period_size_near 192`, `set_periods_near 3` (playback) / `2` (capture), `hw_params` (buffers 576 / 384); sw params:
+  start threshold = boundary, stop threshold = buffer, avail_min = period, silence threshold 0. Its audio thread then drops and prepares
+  both streams, writes 3 periods ahead, starts capture then playback, and loops `readi`/`avail`/`writei`. **No `snd_pcm_link`.** It
+  recovers an underrun (-32) with drop/prepare/start, not `snd_pcm_recover`. Choosing the QC in Preferences: MPC closes `hw:1`
+  first, then on `hw:2` access and format succeed and **`set_rate 44100` returns -22** on both streams. That is the only failing call;
+  MPC closes it and reopens `hw:1`. The log appeared only once MPC opened audio, about 30 s after its restart.
+- **Startup errors with the QC plugged in.** The user gets two error dialogs at every MPC start while the QC is connected. The trace
+  shows MPC opening `hw:1` successfully, then about a second later trying `open "hw:1"` again twice (playback and capture) while still
+  holding it: `-16` (EBUSY), logged as `Failed to open ALSA device for capture hw:1` twice. MPC never tried `hw:2` at that start.
+  The audio already running is unaffected. (Later the same day: it happens with no addins and no QC too; see the startup re-open below.)
+- **Which converter fits MPC's sequence** (`poc/alsatrace` `mpc_negotiate`, replaying it on the device): `hw:CARD=mini` fails at the
+  exact rate as MPC does (channels 8..8). `plughw:CARD=mini` offers 1..10000 channels, so `set_channels_near 32` returns **32**, and
+  its capture `hw_params` fails (-22) with MPC's 2-period request: not usable. alsa-lib's plain `type rate` PCM over `hw:mini` at
+  48000 (inline config, `snd_pcm_open_lconf`) keeps 8 channels, accepts the whole sequence (periods round up: 4 playback, buffer 771;
+  3 capture, buffer 768) and streams 44097 frames/s, duplex, 0 xruns. Its converter is the same 16-bit linear one: recorded through
+  `plughw` at 44.1 kHz versus native 48 kHz, the user heard no difference (amp-sim guitar, stereo reverb), but the converted take has
+  only 16-bit resolution and more energy above 10 kHz (10-16 kHz band -65 versus -79 dB of the total, 16-22 kHz -74 versus -115).
+- **The QC as MPC's audio device, through an addin (same day).** A preview addin (mpc-addin-rate-bridge, hooks `snd_pcm_open` only)
+  opens alsa-lib's `type rate` PCM over `hw:<card>` at 48 kHz when MPC opens a USB card whose `stream0` lists no 44100. Installed with
+  the shared addin installer next to skipback and usb-audio. MPC then accepted the QC in Preferences and logged
+  `Audio 44100Hz; 8-in; 8-out; 128sample buffer`; for that device MPC asks for a 128-frame buffer, which the converter runs as 140-frame
+  periods at 48 kHz (buffers 421/420). MPC's output and input meters both moved. To hear it: QC USB audio set to **Multi Out**, and
+  MPC's output sent to **outputs 3/4**; the Key 61's own outputs are silent while the QC is MPC's device. The Key 61's MAIN volume
+  knob works with the QC selected (user, 2026-11-23; an earlier "no effect" report was made before the outputs were set up). A guitar take recorded on an audio track (input 1/2) played back
+  cleanly (user), with no audio errors in MPC's log for the session.
+- **Round-trip latency through that addin** (cable from a QC output into QC input 2, MPC's metronome on outputs 3/4, the dry input
+  recorded on an audio track at 120 BPM, then the saved WAV measured against the beat grid): **736 samples (16.7 ms)** from MPC's output
+  to its recording, identical on all 16 clicks (±0.5 sample) and no drift. MPC stores each take with `sliceStart: 672` in the project
+  JSON (`.xpj` is gzip; the event's `audio.sliceStart`), so it skips 672 samples (15.2 ms) as its own latency compensation, the same
+  value on every take this session, and takes land 64 samples (1.45 ms) late. MPC never records the metronome itself: measuring needs
+  the physical loop.
+- **MPC doesn't keep an external audio device across restarts (same day).** After the QC was selected in Preferences, an MPC restart
+  (00:27) and a power cycle (00:08) both came back on `hw:1` (the Key 61's own audio); MPC never tried `hw:2` at startup.
+  `MPC.settings` holds `<VALUE name="audioSetup"><DEVICESETUP audioOutputDeviceName="" audioInputDeviceName=""/>` and an
+  `AudioDevices` list with only `Internal`, i.e. the default. MPC rewrites `MPC.settings` while running (about a minute after start,
+  and when leaving Preferences): with the QC selected and running (00:34:31) it saved at 00:35:32, `audioSetup` still empty; the QC
+  appears in the file only as a MIDI device ("Quad Cortex mini MIDI 1"). So MPC 3.10.1 does not persist an external audio device. The two startup dialogs ("AUDIO DEVICE ERROR: Failed to open Capture
+  Stream", the EBUSY re-open of `hw:1` above) also appeared with skipback and usb-audio removed and only the rate-converting addin loaded.
+  (Later: it also happens with no addin at all; see below.)
+- **MPC re-applies its saved audio device at every startup by opening before closing (same day, traced with `poc/alsatrace` and a
+  stock start).** About 0.7 s after opening and starting `hw:1`, MPC runs its device-open routine again, twice, without closing the
+  first handles (no card enumeration in between). The outcome depends on `audioSetup` in `MPC.settings`:
+  `Internal` or empty: the extra opens of `hw:1` get EBUSY (-16): the two "AUDIO DEVICE ERROR: Failed to open Capture Stream" dialogs.
+  Reproduced with **no addins at all** (the shared drop-in moved aside, no `LD_PRELOAD` in MPC's environment) and with the QC unplugged:
+  stock MPC behaviour on this unit, 7 of 7 starts. With the QC's ALSA longname saved (`Neural DSP Quad Cortex mini at
+  usb-ff500000.usb-1.1, high speed`, by hand, MPC stopped, backup first): the QC opens (through the rate-converting addin) while `hw:1` is
+  still running, the audio thread starts all four streams, and MPC aborts with `terminate called without an active exception`
+  (`status=6/ABRT`), at every restart (3 of 3) until the backup was restored. Choosing the QC in Preferences works because MPC closes
+  `hw:1` first. Plugging the QC in while MPC runs triggers no re-open. Settings backups show `audioSetup` was `Internal` (with the QC in
+  the `AudioDevices` list) until 22 Nov 17:26 and empty by 22:14, before any addin of ours existed; selecting Internal in Preferences
+  did not bring `Internal` back, and writing it by hand restores it (Preferences shows Internal, not `*`) but not the dialogs. No safe
+  addin fix: making the duplicate open succeed leads into the crashing path.
+
+## 2026-11-24: unsigned `autorun.sh` on MPC OS 3.10.1.12 (Live III, device-tested)
+
+Device: Akai MPC Live III (Gen2), hostname `mpc-live-iii`, MPC OS 3.10.1.12, az0x 5.0.18, kernel 6.18.44. Disposable-by-owner
+FAT32 stick `10C1-8A76` (vfat, mounted `rw,nosuid,nodev,noexec`). Probe script wrote one marker file next to itself and one
+`logger -t AUTORUNTEST` line, nothing else. Journal is volatile on this device (`/var/log/journal` absent): read it before any reboot.
+Run once with YES; every other prompt answered NO or not shown.
+
+**1. Trigger path.** USB-A stick **root** works: `/media/<label>/autorun.sh`. Not yet tested: a named folder, SD card
+(`/media/card`), internal `/nvme` (see "To test").
+
+**2. Prompt.** Never silent. Dialog titled **AUTORUN SCRIPT**, text: *"The drive 10C1-8A76 contains an autorun script. Do you want
+to run it now?"*, buttons YES / NO. NO runs nothing and the dialog does not return on its own. Different wording from the
+"Script detected... Do you want to run it?" string seen in the 3.10.0 binary diff (2026-10-23): that string may belong to the signed
+`.scriptpkg` path, or it changed in 3.10.1; unresolved.
+
+**3. Developer-mode gating.** The Developer Panel setting is read live, not latched:
+- Developer mode OFF, stick inserted: no prompt, no run (control).
+- Developer mode ON at insert: prompt.
+- Developer mode switched ON with the stick already mounted: prompt appears immediately.
+- ON, then OFF, then insert: no prompt (enabling once does not leave the route open). Switching ON again: prompt again.
+Turning Developer mode OFF also stops SSH; the firmware's off handler logged `mount: /etc ... overlay` failing and
+`sshd.service is not active, cannot reload` (firmware's own, not ours; SSH returned normally on re-enable).
+
+**4. Privilege.** Root. Marker and journal: `uid=0 pwd=/ drive=/media/10C1-8A76`.
+
+**5. Signed path unaffected.** Journal on YES, all at the same second:
+```
+az01-launch-MPC: About to run unprotected script: /media/10C1-8A76/autorun.sh
+systemd: Started /bin/sh /media/10C1-8A76/autorun.sh.
+az01-launch-MPC: Running as unit: autorun-sh.service
+AUTORUNTEST: T1-root-devOFF uid=0 pwd=/ drive=/media/10C1-8A76
+autorun-sh.service: Deactivated successfully.   (240 ms)
+```
+So: a plain `autorun.sh` run by `/bin/sh` as a transient `autorun-sh.service` launched by `az01-launch-MPC` ("unprotected script"). No
+`.scriptpkg` and no `az01-signed-fs` in the log. The `noexec` mount does not matter because it is run via `sh`. (Marker is named
+`T1-root-devOFF` because the tag was set before we knew the run would come from the Dev-ON toggle; the run was with Developer mode ON.)
+
+**Differs from earlier assumptions.** The 2026-10-23 entry says 3.10.x removes the autorun root route. True for the salted
+`autorun/autorun.json` + `autorun.check` route, but on 3.10.1.12 an **unsigned `autorun.sh` is accepted, as root, after a YES, while
+Developer mode is ON**. It is not a no-hack route: it needs Developer Panel enabled (where SSH root is already available), and the
+user taps YES. No 2026-11-24 entry was found in the local repo's docs/NOTES.md to compare against.
+
+### How to write an autorun script (3.10.1.12)
+1. Developer mode ON (Preferences > Enhancements > Developer Panel).
+2. Put a plain `autorun.sh` in the **root** of a FAT32/vfat drive. LF line endings, no CRLF. No signing, hash or JSON.
+3. Insert the drive (or toggle Developer mode ON with it already inserted). Tap **YES** on the AUTORUN SCRIPT dialog.
+4. It runs as `/bin/sh /media/<label>/autorun.sh`, root, cwd `/`, as `autorun-sh.service`, so use `$(dirname "$0")` for the drive
+   path (the drive is `noexec`; call helpers with `sh helper.sh`, not `./helper.sh`).
+5. Output: write to files on the drive or use `logger -t TAG ...`; read with `journalctl -t TAG --no-pager`. A long-running job
+   should hand off properly (a transient service ends when the script exits).
+6. Probe template used here:
+```sh
+#!/bin/sh
+TAG="T1-root-devOFF"
+D="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+TS="$(date +%Y%m%d-%H%M%S)"
+echo "$TAG $TS uid=$(id -u) pwd=$(pwd) drive=$D script=$0" > "$D/AUTORUN_MARKER_${TAG}_${TS}.txt"
+logger -t AUTORUNTEST "$TAG uid=$(id -u) pwd=$(pwd) drive=$D"
+exit 0
+```
+
+### To test next
+- Named folder: derive candidate names from strings in the `MPC` binary of `MPC-3.10.1-Gen2-update.img` (it is on the stick), then
+  test one name at a time (e.g. `autorun/autorun.sh`).
+- SD card (`/media/card`): needs a disposable card or owner OK; one script only.
+- Internal `/nvme`: changes the device (one file); owner decision.
+- Insert while Developer mode ON **and** a project with unsaved changes: does YES/NO touch the project? (Not observed to.)
+- Does anything else (the `.scriptpkg` / `az01-signed-fs` path) get offered, and with what wording? One dialog seen so far.
+- Two drives with scripts at once; script that takes long or forks; whether the prompt repeats after NO on reinsert vs. only on toggle.
+- Reconfirm on 3.10.1.x updates; keep 3.10.1 details out of public PRs/commits until Akai launches (see memory `no-public-3101-mentions`).
+
+State left on the stick: `autorun.sh` (T1 tag) and one `AUTORUN_MARKER_T1-root-devOFF_20261124-120908.txt`. Nothing else changed on the device.
+
+## 2026-11-24: MPC Sample 1.4.0.8 (emulator, QEngine, mpc-compat-tests `mpc-sample-140`; not yet checked on a device)
+
+- **Settings moved** to `/data/Settings/MPC Sample/MPC Sample.settings` (1.3.0.12: `/data/Settings/Akai/MPC Sample/...`). The
+  installers' and the desktop app's glob missed it ("MPC.settings not found" on every route); they now look in both places.
+- **VST2 Support switch.** Preferences > Enhancements, the same keys as MPC OS 3.10.1 (`Enhancements.Enabled`,
+  `Enhancements.VST2Support`). With them off MPC never tries to load a plugin in the project; with them on it does.
+- **The card is remounted exec by MPC.** With VST2 Support on, the first time MPC loads a plugin from the SD card it remounts the
+  card without `noexec`. The bind-mount workaround (2026-11-05) is not needed, and a plugin in the project still loads after a reboot.
+- **Where plugins go.** MPC loads the path the project names. A plugin copied to `<card>/VST2 Plugins` was not picked up when MPC
+  started, so the card's `Synths` stays the install target on a Sample; the desktop app no longer treats a Sample's VST2 Support as
+  MPC OS 3.10.1's VST2 mode.
+- MPC's main thread is named `<MPCSample>` (1.3: `MPC Sample`).
+- To check on a device: the remount, and whether 1.4's VST plugins page lists anything from `<card>/VST2 Plugins`.
+
+## 2026-11-24: MPC Sample 1.4.0.8, plugin pages on the device (device, MPC Sample)
+
+- **A pad's Knob FX is two instances.** Putting a plugin on one pad's Knob FX makes two instances; both get
+  effMainsChanged, only one ever gets processReplacing (a per-instance trace, 344 blocks of 128 frames a second at 44.1 kHz,
+  in place, one thread). In the project it is Submix 1's insert (`mixer.submixes[0].mixable.inserts`), and the pad's
+  `audioRoute` is destination 1 (submix), sub-index 0.
+- **The page waits for audio.** With a page opened at effMainsChanged, both instances registered a page under the same
+  name. `wrapper/sample_page.h` now starts a small thread at effMainsChanged that opens the page once the instance has
+  processed a block, so only the instance that plays has one (the idle one's thread exits at effClose). Offline only so
+  far: `tools/test_sample_page.sh` checks it (no page before audio, one after); not yet isolated on the device.
+- **Screen refreshes cost MPC audio.** The panel is SPI; while a draw-handler page refreshed the whole screen at 15 fps, MPC's
+  audio thread ran 252 blocks a second instead of 344, heard as stutter. Refreshing only the rows that changed, in separate
+  bands, kept all 344 while scrolling RACK (mpc-addin-sample-draw-handler 1.1). Keep a page's redraws to what changes.
+- **1.4 presents with DRM atomic commits** (FB_ID and FB_DAMAGE_CLIPS on the primary plane), not page flips: a draw handler
+  older than 1.1 paints nothing on 1.4.
+
+## 2026-11-24: Knob FX knobs in plugin.json (offline)
+
+- Akai's SDK (docs/knob-fx.md, MPC Sample 1.4+) maps a Knob FX's three knobs and the three SHIFT knobs with `knobs` /
+  `shiftKnobs` in `plugin.json`; without them the Sample puts params 0-5 there, labelled `Param 1`-`Param 6`. Releases had
+  neither. `gen_vst.py` now writes `build/knob-fx.json` from vst.json `"knob_fx"`, or from an effect's `"sample_page"` banks,
+  and `release.py` adds it to `plugin.json`; `sdk_release.py` keeps an SDK plugin's own. Not yet checked on a device.
+
+## 2026-11-25: an addin never loaded when another addin's drop-in sorted after ours (Force, MPC OS 3.10.1; device-tested by hand, installer fix offline)
+- Force 3.10.1.12 with a `hwremap.conf` drop-in that sets the whole `LD_PRELOAD` list: the Plugin Manager app installed, MPC restarted, and
+  `/proc/<MPC>/environ` had no `modeslot.so`. systemd applies drop-ins in name order, so `hwremap.conf` (h) is read after
+  `90-mpc-addins.conf` (9) and replaces our list. `/etc` there is the stacked layout of case 18 (a read-only overlay on a writable one), so
+  `unit_with_preload` found `hwremap.conf` but `writable` refused the read-only view, and the installer fell back to the shared drop-in.
+- Fix (`upper_of` in addin-lib.sh): when the file that wins is also in the writable layer, edit that copy (add on install, remove on
+  uninstall) and drop the cached view. Test case 18b. Not run under the device's BusyBox yet. By hand on the Force the same edit loaded the
+  app (`modeslot: installed: Force 3.10.1`) and it survived a reboot.
+- Lesson: editing the upper directory with `sed -i` (new inode) behind a mounted overlay left `/etc` showing the old file; `etc_refresh`
+  (drop_caches) or an in-place write fixes the view, and a reboot always does.

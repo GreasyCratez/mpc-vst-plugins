@@ -47,6 +47,21 @@ with sync_playwright() as p:
     check("tags in a shared link are applied; unknown and repeated ones are dropped", names(pg) == ["TESTED TWO"] and pressed() == 2, (names(pg), tags()))
     pg.locator("#clear").click(); pg.wait_for_timeout(100)
     check("Clear filters also clears the tags", len(names(pg)) == total and pressed() == 0)
+    # 2a. style chips: only inside a kind, the styles that kind has; one-offs fold only when enough stay in view; in step with the dropdown
+    pg.goto(URL); pg.wait_for_timeout(300)
+    check("no style chips under All", pg.locator("#stylechips").is_hidden())
+    pg.click("#tab-instrument"); pg.wait_for_timeout(100)
+    chips = lambda: pg.locator("#stylechips [data-style]").all_inner_texts()
+    check("Instruments: All styles, then the kind's styles by count", chips()[0].upper() == "ALL STYLES" and chips()[1].upper().startswith("SYNTH") and not any(c.upper().startswith(("REVERB", "SEQUENCER")) for c in chips()), chips())
+    pg.click('#stylechips [data-style="synth"]'); pg.wait_for_timeout(100)
+    check("picking a style chip filters, sets the dropdown and the link", set(names(pg)) <= {"TEST SYNTH", "TESTED TWO", "THREE ONLY"} and len(names(pg)) >= 1
+          and pg.locator("#f-style").input_value() == "synth" and "style=synth" in pg.evaluate("location.hash")
+          and pg.locator('#stylechips [data-style="synth"]').get_attribute("aria-pressed") == "true", names(pg))
+    check("a style picked on the chips is not counted on More filters", pg.locator("#more-n").inner_text() == "")
+    pg.click("#tab-effect"); pg.wait_for_timeout(100)
+    check("changing to a kind without that style drops it", pg.locator("#f-style").input_value() == "" and "style=" not in pg.evaluate("location.hash"))
+    check("Effects: its own styles, none folded (all are one-offs)", sorted(c.split(" ")[0].upper() for c in chips()[1:]) == ["DYNAMICS", "REVERB", "SATURATION"] and pg.locator("#stylechips .more").count() == 0, chips())
+    pg.click("#tab-plugins"); pg.click("#tab-all"); pg.wait_for_timeout(100)
     pg.fill("#q", "reverb"); pg.wait_for_timeout(100)
     check("typing in Search still finds a tag (a collection holding such plugins matches too)", "OLD CATALOG" in names(pg) and "TEST SYNTH" not in names(pg), names(pg))
     pg.fill("#q", "")
@@ -58,7 +73,7 @@ with sync_playwright() as p:
     bar = card.locator(".sig.stat")
     check("the downloads count is in a bar under the title, even with the details folded, and there are no community buttons while the service is down", bar.count() == 1 and "6" in bar.inner_text() and "downloads" in bar.inner_text() and card.locator(".sig-btn").count() == 0, bar.inner_text() if bar.count() else "")
     order = card.evaluate("el => [...el.children].map(c => c.className.split(' ')[0] || c.tagName.toLowerCase())")
-    check("the bar sits between the title bar and the tags", order.index("sig") == order.index("header") + 1 and order[order.index("sig") + 1] == "tags", order)
+    check("the bar sits between the title bar and its badge row (#941) and the tags", order.index("sig") == (order.index("metarow") if "metarow" in order else order.index("header")) + 1 and order[order.index("sig") + 1] == "tags", order)
     coll = pg.locator("article.card.coll").first
     check("a collection card shows its most downloaded member's downloads in the same place", "40" in coll.locator(".sig.stat").inner_text(), coll.locator(".sig.stat").inner_text() if coll.locator(".sig.stat").count() else "none")
     # 2c. the device switch (MPC / Force | MPC Sample) at the top of the filters
